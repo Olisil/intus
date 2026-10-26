@@ -1,9 +1,13 @@
 {
+  "default": "hemma",
   "tours": [
+    {
+      "id": "hemma",
+      "title": "Hemma"
+    },
     {
       "id": "demo",
       "title": "Demo"
     }
-  ],
-  "default": "demo"
+  ]
 }
