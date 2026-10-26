@@ -1,0 +1,30 @@
+{
+  "title": "Demo",
+  "eyebrow": "Intus",
+  "subtitle": "Syntetiskt testhus – två våningar",
+  "lang": "sv",
+  "splat": "tour.sog",
+  "collision": null,
+  "spawn": {
+    "position": [
+      0,
+      0,
+      0
+    ],
+    "yaw": 0
+  },
+  "eyeHeight": 1.6,
+  "bounds": {
+    "min": [
+      -1.81,
+      0.02,
+      -7.08
+    ],
+    "max": [
+      5.1,
+      5.25,
+      1.55
+    ]
+  },
+  "created": "2026-10-26 08:31"
+}
