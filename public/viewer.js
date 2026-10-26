@@ -35,16 +35,30 @@ const STRINGS = {
 let T = STRINGS.en;
 
 // ---------------------------------------------------------------- tour config
+// Where tours live. Set once in the page:  <meta name="intus-tours" content="https://<your-bucket>/">
+// Without it, tours load from the site's own tours/ folder.
+const TOURS_BASE = new URL(document.querySelector('meta[name="intus-tours"]')?.content || 'tours/', document.baseURI).href;
+
 async function resolveTourUrl() {
   if (qs.get('tour')) return new URL(qs.get('tour'), document.baseURI).href;
   let id = qs.get('t');
   if (!id) {
-    try {
-      const idx = await (await fetch(new URL('tours/index.json', document.baseURI), { cache: 'no-cache' })).json();
-      id = idx.default || idx.tours?.[0]?.id;
-    } catch { /* no index */ }
+    // optional list of tours with a default: index.json next to the tours (bucket or site)
+    for (const base of [TOURS_BASE, new URL('tours/', document.baseURI).href]) {
+      try {
+        const idx = await (await fetch(new URL('index.json', base), { cache: 'no-cache' })).json();
+        id = idx.default || idx.tours?.[0]?.id;
+        if (id) break;
+      } catch { /* none here */ }
+    }
   }
-  return new URL(`tours/${encodeURIComponent(id || 'demo')}/tour.json`, document.baseURI).href;
+  id = encodeURIComponent(id || 'demo');
+  // try the bucket first, then the site's own tours/ (the demo ships with the site)
+  for (const base of [TOURS_BASE, new URL('tours/', document.baseURI).href]) {
+    const url = new URL(`${id}/tour.json`, base).href;
+    try { if ((await fetch(url, { method: 'HEAD', cache: 'no-cache' })).ok) return url; } catch { /* next */ }
+  }
+  return new URL(`${id}/tour.json`, TOURS_BASE).href;
 }
 
 const DEFAULTS = {
@@ -220,7 +234,7 @@ async function main() {
   const collider = world.createCollider(RAPIER.ColliderDesc.capsule(HALF, R), body);
   const kcc = world.createCharacterController(0.02);
   kcc.setUp({ x: 0, y: 1, z: 0 });
-  kcc.enableAutostep(tour.stepHeight, 0.12, false);
+  kcc.enableAutostep(tour.stepHeight, 0.05, false);
   kcc.enableSnapToGround(0.35);
   kcc.setMaxSlopeClimbAngle((55 * Math.PI) / 180);
   kcc.setMinSlopeSlideAngle((65 * Math.PI) / 180);
