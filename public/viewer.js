@@ -36,15 +36,15 @@ let T = STRINGS.en;
 
 // ---------------------------------------------------------------- tour config
 async function resolveTourUrl() {
-  if (qs.get('tour')) return new URL(qs.get('tour'), location.href).href;
+  if (qs.get('tour')) return new URL(qs.get('tour'), document.baseURI).href;
   let id = qs.get('t');
   if (!id) {
     try {
-      const idx = await (await fetch('tours/index.json', { cache: 'no-cache' })).json();
+      const idx = await (await fetch(new URL('tours/index.json', document.baseURI), { cache: 'no-cache' })).json();
       id = idx.default || idx.tours?.[0]?.id;
     } catch { /* no index */ }
   }
-  return new URL(`tours/${encodeURIComponent(id || 'demo')}/tour.json`, location.href).href;
+  return new URL(`tours/${encodeURIComponent(id || 'demo')}/tour.json`, document.baseURI).href;
 }
 
 const DEFAULTS = {

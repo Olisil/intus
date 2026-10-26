@@ -1,17 +1,16 @@
 ---
-// The viewer is plain HTML + JS; its files live in public/ and load by relative path.
+// The viewer is plain HTML + JS; its files live in public/.
+// Webflow Cloud sets the base path from the environment's mount path (e.g. /intus) at build time;
+// <base> makes every relative URL resolve under it, with or without a trailing slash.
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 ---
 <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<base href={base}>
 <title>Walkthrough</title>
-<script is:inline>
-  // Hosted under a sub-path (e.g. /app): make sure the URL ends in "/" so relative files resolve.
-  if (!location.pathname.endsWith('/') && !/\.[a-z0-9]+$/i.test(location.pathname))
-    location.replace(location.pathname + '/' + location.search + location.hash);
-</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400&family=Inter:wght@400;500&display=swap" rel="stylesheet">
