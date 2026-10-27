@@ -52,6 +52,12 @@ export function unionOutline(rects) {
     });
     if (out.length >= 3) loops.push(out);
   }
+  // keep outer outlines only: a hole inside a room (furniture nobody could stand on) is still the room
+  const area = (l) => l.reduce((s, p, i) => { const q = l[(i + 1) % l.length]; return s + p[0] * q[1] - q[0] * p[1]; }, 0) / 2;
+  if (loops.length > 1) {
+    const sign = Math.sign(area(loops.reduce((a, b) => (Math.abs(area(b)) > Math.abs(area(a)) ? b : a))));
+    return loops.filter((l) => Math.sign(area(l)) === sign);
+  }
   return loops;
 }
 
@@ -66,8 +72,8 @@ const pointInLoops = (loops, x, y) => {
 
 // Close the gaps the room detection leaves between rooms (it stops short of the walls): every
 // rectangle edge that faces another room within `reach` moves halfway towards it, leaving `wall`
-// between them (rectangles of the same room meet exactly). Idempotent; stairs are left alone.
-export function tightenRooms(rooms, wall = 0.12, reach = 0.7) {
+// between them (rectangles of the same room meet exactly, from up to 1.5 m apart). Idempotent; stairs are left alone.
+export function tightenRooms(rooms, wall = 0.12, reach = 0.7, sameReach = 1.5) {
   const out = rooms.map((r) => ({ ...r, rects: (r.rects || []).map((q) => [...q]) }));
   const items = [];
   out.forEach((r) => { if (r.kind !== 'stairs') r.rects.forEach((q, k) => items.push({ r, q, o: [...rooms[out.indexOf(r)].rects[k]] })); });
@@ -81,8 +87,9 @@ export function tightenRooms(rooms, wall = 0.12, reach = 0.7) {
         if (B === A || B.r.level !== A.r.level) continue;
         const g = sgn * (B.o[f] - A.o[e]);
         const overlap = Math.min(A.o[s1], B.o[s1]) - Math.max(A.o[s0], B.o[s0]);
-        if (overlap < 0.25 || g < -1e-6 || g > reach) continue;
-        const w = B.r === A.r ? 0 : wall;
+        const same = B.r === A.r;
+        if (overlap < 0.25 || g < -1e-6 || g > (same ? sameReach : reach)) continue;
+        const w = same ? 0 : wall;
         if (!best || g < best.g) best = { g, w };
       }
       if (best && best.g > best.w + 1e-4) A.q[e] = +(A.o[e] + sgn * (best.g - best.w) / 2).toFixed(3);
