@@ -16,22 +16,35 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<link rel="modulepreload" href="lib/playcanvas.mjs">
+<link rel="modulepreload" href="lib/rapier.mjs">
+<link rel="modulepreload" href="map.js">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<!--intus:body-->
 <canvas id="c"></canvas>
 
 <!-- Intro / pause screen -->
 <div id="intro" class="screen">
-  <div class="card">
-    <p class="eyebrow" id="eyebrow"></p>
-    <h1 id="title">Loading…</h1>
-    <p class="subtitle" id="subtitle"></p>
-    <div class="progress" id="progress"><div></div></div>
-    <button id="enter" class="enter" disabled>
-      <span id="enterLabel">Loading</span>
-    </button>
-    <div class="keys" id="keys"></div>
+  <div class="intro-grid">
+    <div class="card">
+      <p class="eyebrow" id="eyebrow"></p>
+      <h1 id="title">Loading…</h1>
+      <p class="subtitle" id="subtitle"></p>
+      <div class="progress" id="progress"><div></div></div>
+      <p class="progress-text" id="progressText"></p>
+      <button id="enter" class="enter" disabled>
+        <span id="enterLabel">Loading</span>
+      </button>
+      <div class="rooms hidden" id="rooms"><p class="rooms-title" id="roomsTitle"></p><div id="roomList"></div></div>
+      <div class="keys" id="keys"></div>
+      <div class="quality hidden" id="quality"><span id="qualityLabel"></span><div class="qseg" id="qualitySeg"></div></div>
+    </div>
+    <div class="intro-map hidden" id="introMap">
+      <canvas id="mapLarge"></canvas>
+      <p class="map-hint" id="mapHint"></p>
+    </div>
   </div>
 </div>
 
@@ -40,13 +53,16 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 
 <!-- In-tour UI -->
 <div id="hud" class="hidden">
-  <div class="badge" id="badge"></div>
+  <div class="badge" id="badge"><span id="badgeTitle"></span><span class="badge-room hidden" id="badgeRoom"></span></div>
+  <div class="room-toast" id="roomToast"></div>
   <div class="hint" id="hint"></div>
   <div class="dev hidden" id="dev"></div>
+  <canvas id="mapSmall" class="mini hidden"></canvas>
 </div>
 
 <!-- Touch controls -->
 <div id="stick" class="hidden"><div id="knob"></div></div>
+<!--/intus:body-->
 
 <script is:inline type="module" src="viewer.js"></script>
 </body>

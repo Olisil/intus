@@ -43,3 +43,43 @@ h1 { margin: 0; font-family: Fraunces, Georgia, serif; font-weight: 300; font-si
 #stick { position: fixed; left: 28px; bottom: 28px; width: 120px; height: 120px; border-radius: 50%;
   border: 1px solid var(--line); background: rgba(18,18,20,.35); z-index: 6; touch-action: none; }
 #knob { position: absolute; left: 50%; top: 50%; width: 48px; height: 48px; margin: -24px 0 0 -24px; border-radius: 50%; background: rgba(244,241,236,.55); }
+
+/* ---- intro with floor map ---- */
+.intro-grid { display: flex; align-items: center; justify-content: center; gap: 28px; width: 100%; max-width: 1280px; }
+.intro-map { position: relative; flex: 1 1 auto; min-width: 0; height: min(78vh, 720px); }
+.intro-map canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.map-hint { position: absolute; left: 0; right: 0; bottom: -4px; margin: 0; text-align: center; font-size: 12px; color: var(--muted); pointer-events: none; }
+.screen.with-map .card { flex: 0 0 auto; width: min(400px, 100%); }
+.progress-text { margin: 8px 0 0; min-height: 16px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.progress-text:empty { display: none; }
+.rooms { margin-top: 22px; }
+.rooms-title { margin: 0 0 10px; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
+.room-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.room-floor { font-size: 11px; color: var(--muted); margin-right: 4px; min-width: 64px; }
+.room-chip { padding: 6px 11px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--ink);
+  font: 400 12px/1.2 Inter, sans-serif; cursor: pointer; transition: background .15s, border-color .15s; }
+.room-chip:hover { background: rgba(244,241,236,.08); border-color: rgba(244,241,236,.32); }
+body:not(.ready) .room-chip { opacity: .55; }
+.quality { display: flex; align-items: center; gap: 10px; margin-top: 18px; font-size: 12px; color: var(--muted); }
+.qseg { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 999px; }
+.qseg button { border: 0; background: transparent; color: var(--muted); padding: 5px 10px; border-radius: 999px; font: 12px Inter, sans-serif; cursor: pointer; }
+.qseg button.on { background: rgba(244,241,236,.12); color: var(--ink); }
+.qseg.busy { opacity: .5; pointer-events: none; }
+@media (max-width: 860px) {
+  .screen.with-map { place-items: start center; }
+  .intro-grid { flex-direction: column; gap: 4px; }
+  .intro-map { order: -1; width: 100%; flex: 0 0 auto; height: 38vh; min-height: 220px; }
+  .screen.with-map .card { width: 100%; padding: 22px 20px 20px; }
+}
+
+/* ---- walking HUD ---- */
+.badge { display: flex; gap: 10px; align-items: baseline; }
+.badge-room { color: var(--accent); }
+.badge-room::before { content: "·"; margin-right: 10px; color: var(--muted); }
+.room-toast { position: absolute; top: 18%; left: 50%; transform: translate(-50%, 6px); opacity: 0;
+  font: 300 clamp(26px, 4vw, 40px)/1.1 Fraunces, Georgia, serif; letter-spacing: -0.01em; text-shadow: 0 2px 18px rgba(0,0,0,.55);
+  transition: opacity .5s ease, transform .5s ease; white-space: nowrap; }
+.room-toast.show { opacity: 1; transform: translate(-50%, 0); }
+.mini { position: absolute; inset: auto 16px 16px auto; width: 250px; height: 190px; pointer-events: auto; cursor: pointer;
+  border-radius: 16px; background: rgba(13,13,14,.42); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+@media (max-width: 760px) { .mini { width: 156px; height: 124px; inset: auto 12px 12px auto; border-radius: 12px; } }

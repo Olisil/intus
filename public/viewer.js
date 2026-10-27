@@ -1,35 +1,47 @@
-// Nassau walkthrough viewer
+// intus walkthrough viewer
 // Renders a Gaussian splat tour with PlayCanvas and walks it with a Rapier
 // character controller (wall collision, stair auto-step, snap to ground).
 //
 // URL parameters
 //   ?t=<id>          load tours/<id>/tour.json   (default: first id in tours/index.json, else "demo")
 //   ?tour=<url>      load any tour.json by URL
+//   ?room=<id|name>  start in this room
+//   ?q=high|light    force the quality (otherwise chosen for the device, and remembered when changed)
 //   ?edit            developer mode: F fly, G show collision, P copy spawn, position readout
 //   ?lang=sv|en      force UI language
 
-import * as pc from './lib/playcanvas.mjs';
-import RAPIER from './lib/rapier.mjs';
+import { TourMap } from './map.js';
+
+// Start downloading the engine and physics right away, in parallel with the tour itself.
+const libs = Promise.all([import('./lib/playcanvas.mjs'), import('./lib/rapier.mjs')]);
 
 const qs = new URLSearchParams(location.search);
 const EDIT = qs.has('edit');
 const $ = (id) => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem('intus.' + k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem('intus.' + k, v); } catch { /* private mode */ } },
+};
 
 // ---------------------------------------------------------------- strings
 const STRINGS = {
   en: {
     loading: 'Loading', enter: 'Step inside', resume: 'Continue', tapEnter: 'Tap to step inside',
-    move: 'Move', look: 'Look around', run: 'Walk faster', reset: 'Back to start', exit: 'Pause',
+    move: 'Move', look: 'Look around', run: 'Walk faster', reset: 'Back to start', exit: 'Pause', map: 'Map',
     drag: 'Drag', stick: 'Joystick', hint: 'WASD to walk · mouse to look · Esc to pause',
     hintTouch: 'Joystick to walk · drag to look', mouse: 'Mouse',
-    err: 'The tour files could not be loaded.',
+    err: 'The tour files could not be loaded.', goTo: 'Go to', floor: 'Floor',
+    mapHint: 'Click a room to go there · drag to turn the house', mapHintTouch: 'Tap a room to go there',
+    quality: 'Quality', qAuto: 'Auto', qHigh: 'High', qLight: 'Light', mb: 'MB',
   },
   sv: {
     loading: 'Laddar', enter: 'Kliv in', resume: 'Fortsätt', tapEnter: 'Tryck för att kliva in',
-    move: 'Gå', look: 'Se dig omkring', run: 'Gå snabbare', reset: 'Till början', exit: 'Paus',
+    move: 'Gå', look: 'Se dig omkring', run: 'Gå snabbare', reset: 'Till början', exit: 'Paus', map: 'Karta',
     drag: 'Dra', stick: 'Styrspak', hint: 'WASD för att gå · musen för att titta · Esc för paus',
     hintTouch: 'Styrspak för att gå · dra för att titta', mouse: 'Mus',
-    err: 'Visningens filer kunde inte laddas.',
+    err: 'Visningens filer kunde inte laddas.', goTo: 'Gå till', floor: 'Våning',
+    mapHint: 'Klicka på ett rum för att gå dit · dra för att vrida huset', mapHintTouch: 'Tryck på ett rum för att gå dit',
+    quality: 'Kvalitet', qAuto: 'Auto', qHigh: 'Hög', qLight: 'Lätt', mb: 'MB',
   },
 };
 let T = STRINGS.en;
@@ -43,7 +55,6 @@ async function resolveTourUrl() {
   if (qs.get('tour')) return new URL(qs.get('tour'), document.baseURI).href;
   let id = qs.get('t');
   if (!id) {
-    // optional list of tours with a default: index.json next to the tours (bucket or site)
     for (const base of [TOURS_BASE, new URL('tours/', document.baseURI).href]) {
       try {
         const idx = await (await fetch(new URL('index.json', base), { cache: 'no-cache' })).json();
@@ -53,26 +64,72 @@ async function resolveTourUrl() {
     }
   }
   id = encodeURIComponent(id || 'demo');
-  // try the bucket first, then the site's own tours/ (the demo ships with the site)
   for (const base of [TOURS_BASE, new URL('tours/', document.baseURI).href]) {
     const url = new URL(`${id}/tour.json`, base).href;
-    try { if ((await fetch(url, { method: 'HEAD', cache: 'no-cache' })).ok) return url; } catch { /* next */ }
+    try {
+      const r = await fetch(url, { cache: 'no-cache' });
+      if (r.ok) return { url, json: await r.json() };
+    } catch { /* next */ }
   }
-  return new URL(`${id}/tour.json`, TOURS_BASE).href;
+  throw new Error(`tour "${decodeURIComponent(id)}" not found`);
 }
 
 const DEFAULTS = {
   title: 'Walkthrough', eyebrow: '', subtitle: '', lang: null,
-  splat: 'tour.sog', collision: 'collision.glb',
+  splat: 'tour.sog', splatLite: null, collision: 'collision.glb',
   spawn: { position: [0, 0, 0], yaw: 0 },
   eyeHeight: 1.6, walkSpeed: 1.4, runSpeed: 2.8,
   fov: 75, background: '#0d0d0e',
   stepHeight: 0.28, playerRadius: 0.22,
-  bounds: null, path: null,
+  bounds: null, path: null, map: null,
 };
 
+// ---------------------------------------------------------------- device + quality
+const touch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+function weakDevice() {
+  const c = navigator.connection || {};
+  if (c.saveData || ['slow-2g', '2g', '3g'].includes(c.effectiveType) || (c.downlink && c.downlink < 4)) return true;
+  if (touch) return true;                                       // phones and tablets
+  if (navigator.deviceMemory && navigator.deviceMemory <= 4) return true;
+  if (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4) return true;
+  return false;
+}
+const qualitySetting = () => qs.get('q') || store.get('quality') || 'auto';
+const chooseQuality = (tour) => {
+  if (!tour.splatLite) return 'high';
+  const s = qualitySetting();
+  if (s === 'high' || s === 'light') return s;
+  return weakDevice() ? 'light' : 'high';
+};
+
+// ---------------------------------------------------------------- download with progress + resume
+// Flaky wifi drops long downloads; this picks up where it stopped (HTTP range) instead of restarting.
+async function download(url, onProgress, tries = 5) {
+  let got = 0, total = 0, chunks = [];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(url, got ? { headers: { Range: `bytes=${got}-` } } : { cache: 'no-cache' });
+      if (got && res.status !== 206) { got = 0; chunks = []; }
+      if (!res.ok) throw new Error(`${url} (${res.status})`);
+      if (!total) total = parseInt(res.headers.get('content-length') || '0', 10) + got;
+      if (!res.body?.getReader) { const b = await res.arrayBuffer(); onProgress(b.byteLength, b.byteLength); return b; }
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value); got += value.byteLength;
+        onProgress(got, total);
+      }
+      return await new Blob(chunks).arrayBuffer();
+    } catch (e) {
+      if (attempt >= tries - 1) throw e;
+      await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+    }
+  }
+}
+
 // ---------------------------------------------------------------- GLB collision loader
-// Minimal glTF 2.0 binary reader: collects all triangle primitives, baked into world space.
+// Minimal glTF 2.0 binary reader for the collision mesh written by collision.py (one node, no transforms).
 function parseGlbTriangles(buf) {
   const dv = new DataView(buf);
   if (dv.getUint32(0, true) !== 0x46546c67) throw new Error('collision file is not a GLB');
@@ -84,66 +141,30 @@ function parseGlbTriangles(buf) {
     else if (type === 0x004e4942) bin = buf.slice(start, start + len);
     off = start + len;
   }
-  const g = json;
-  const read = (accIdx) => {
-    const acc = g.accessors[accIdx];
-    const view = g.bufferViews[acc.bufferView];
-    const comps = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }[acc.type];
-    const Ctor = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }[acc.componentType];
-    const byteOff = (view.byteOffset || 0) + (acc.byteOffset || 0);
-    const stride = view.byteStride || Ctor.BYTES_PER_ELEMENT * comps;
-    const out = new Ctor(acc.count * comps);
-    const src = new DataView(bin);
-    for (let i = 0; i < acc.count; i++) {
-      for (let c = 0; c < comps; c++) {
-        const p = byteOff + i * stride + c * Ctor.BYTES_PER_ELEMENT;
-        out[i * comps + c] = Ctor === Float32Array ? src.getFloat32(p, true)
-          : Ctor === Uint32Array ? src.getUint32(p, true)
-          : Ctor === Uint16Array ? src.getUint16(p, true) : src.getUint8(p);
-      }
-    }
-    return out;
-  };
   const positions = [], indices = [];
   let base = 0;
-  const visit = (nodeIdx, parent) => {
-    const n = g.nodes[nodeIdx];
-    const local = new pc.Mat4();
-    if (n.matrix) local.set(n.matrix);
-    else {
-      const t = n.translation || [0, 0, 0], r = n.rotation || [0, 0, 0, 1], s = n.scale || [1, 1, 1];
-      local.setTRS(new pc.Vec3(...t), new pc.Quat(r[0], r[1], r[2], r[3]), new pc.Vec3(...s));
-    }
-    const world = new pc.Mat4().mul2(parent, local);
-    if (n.mesh !== undefined) {
-      for (const prim of g.meshes[n.mesh].primitives) {
-        if (prim.mode !== undefined && prim.mode !== 4) continue;
-        const pos = read(prim.attributes.POSITION);
-        const v = new pc.Vec3();
-        const count = pos.length / 3;
-        for (let i = 0; i < count; i++) {
-          v.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
-          world.transformPoint(v, v);
-          positions.push(v.x, v.y, v.z);
-        }
-        const idx = prim.indices !== undefined ? read(prim.indices) : Uint32Array.from({ length: count }, (_, i) => i);
-        for (let i = 0; i < idx.length; i++) indices.push(idx[i] + base);
-        base += count;
-      }
-    }
-    (n.children || []).forEach((c) => visit(c, world));
-  };
-  const scene = g.scenes?.[g.scene ?? 0];
-  (scene ? scene.nodes : g.nodes.map((_, i) => i)).forEach((i) => visit(i, new pc.Mat4()));
+  for (const mesh of json.meshes) for (const prim of mesh.primitives) {
+    if (prim.mode !== undefined && prim.mode !== 4) continue;
+    const read = (i) => {
+      const acc = json.accessors[i], view = json.bufferViews[acc.bufferView];
+      const C = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }[acc.componentType];
+      const n = acc.count * ({ SCALAR: 1, VEC3: 3 }[acc.type] || 1);
+      return new C(bin.slice((view.byteOffset || 0) + (acc.byteOffset || 0)), 0, n);
+    };
+    const pos = read(prim.attributes.POSITION);
+    for (let i = 0; i < pos.length; i++) positions.push(pos[i]);
+    const count = pos.length / 3;
+    const idx = prim.indices !== undefined ? read(prim.indices) : Uint32Array.from({ length: count }, (_, i) => i);
+    for (let i = 0; i < idx.length; i++) indices.push(idx[i] + base);
+    base += count;
+  }
   return { vertices: new Float32Array(positions), indices: new Uint32Array(indices) };
 }
 
 // ---------------------------------------------------------------- main
 async function main() {
-  const tourUrl = await resolveTourUrl();
-  const res = await fetch(tourUrl, { cache: 'no-cache' });
-  if (!res.ok) throw new Error(`${tourUrl} (${res.status})`);
-  const tour = { ...DEFAULTS, ...(await res.json()) };
+  const { url: tourUrl, json } = await resolveTourUrl();
+  const tour = { ...DEFAULTS, ...json };
   const lang = qs.get('lang') || tour.lang || (navigator.language || 'en').slice(0, 2);
   T = STRINGS[lang] || STRINGS.en;
   document.documentElement.lang = STRINGS[lang] ? lang : 'en';
@@ -152,17 +173,89 @@ async function main() {
   $('eyebrow').textContent = tour.eyebrow || '';
   $('subtitle').textContent = tour.subtitle || '';
   $('enterLabel').textContent = T.loading;
-
-  const touch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
   $('keys').innerHTML = touch
     ? `<span>${T.stick}</span><span>${T.move}</span><span>${T.drag}</span><span>${T.look}</span>`
     : `<span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span>${T.move}</span>
        <span><kbd>${T.mouse}</kbd></span><span>${T.look}</span>
        <span><kbd>Shift</kbd></span><span>${T.run}</span>
        <span><kbd>R</kbd></span><span>${T.reset}</span>
+       ${tour.map ? `<span><kbd>M</kbd></span><span>${T.map}</span>` : ''}
        <span><kbd>Esc</kbd></span><span>${T.exit}</span>`;
-
   const resolve = (f) => new URL(f, tourUrl).href;
+
+  // ---- floor map (drawn while everything else loads)
+  let mapLarge = null, mapSmall = null, pendingRoom = qs.get('room');
+  let goToRoom = null;  // set once the player exists
+  if (tour.map && tour.map.rooms?.length) {
+    const pick = (id, from) => {
+      if (from === 'small') { pause(); return; }
+      if (goToRoom) goToRoom(id); else { pendingRoom = id; mapLarge.current = id; }
+    };
+    mapLarge = new TourMap($('mapLarge'), tour.map, { baseUrl: tourUrl, onPick: pick });
+    mapLarge.mode = 'large';
+    mapSmall = new TourMap($('mapSmall'), tour.map, { baseUrl: tourUrl, onPick: pick });
+    mapSmall.mode = 'small';
+    $('introMap').classList.remove('hidden');
+    $('intro').classList.add('with-map');
+    $('mapHint').textContent = touch ? T.mapHintTouch : T.mapHint;
+    // room buttons, by storey
+    const levels = tour.map.levels || [];
+    const rooms = mapLarge.rooms;
+    const groups = levels.map((_, li) => rooms.filter((r) => r.level === li));
+    $('roomList').innerHTML = groups.map((g, li) => !g.length ? '' :
+      `<div class="room-group">${levels.length > 1 ? `<span class="room-floor">${T.floor} ${li + 1}</span>` : ''}${g.map((r) =>
+        `<button class="room-chip" data-room="${r.id}">${(r.name || '').replace(/</g, '&lt;')}</button>`).join('')}</div>`).join('');
+    $('roomsTitle').textContent = T.goTo;
+    $('rooms').classList.remove('hidden');
+    $('roomList').addEventListener('click', (e) => { const b = e.target.closest('[data-room]'); if (b) pick(b.dataset.room, 'large'); });
+    $('roomList').addEventListener('mouseover', (e) => { const b = e.target.closest('[data-room]'); mapLarge.hover = b ? b.dataset.room : null; });
+    $('roomList').addEventListener('mouseleave', () => { mapLarge.hover = null; });
+  }
+  let last = performance.now(), lastSmall = 0;
+  const mapLoop = (now) => {
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    if (mapLarge && !$('intro').classList.contains('hidden')) mapLarge.draw(dt);
+    else if (mapSmall && !$('mapSmall').classList.contains('hidden') && now - lastSmall > 50) { mapSmall.draw(dt); lastSmall = now; }
+    requestAnimationFrame(mapLoop);
+  };
+  requestAnimationFrame(mapLoop);
+
+  // ---- quality
+  let quality = chooseQuality(tour);
+  if (tour.splatLite) {
+    $('quality').classList.remove('hidden');
+    $('qualityLabel').textContent = T.quality;
+    const seg = $('qualitySeg');
+    seg.innerHTML = [['auto', T.qAuto], ['high', T.qHigh], ['light', T.qLight]]
+      .map(([v, l]) => `<button data-q="${v}">${l}</button>`).join('');
+    const mark = () => [...seg.children].forEach((b) => b.classList.toggle('on', b.dataset.q === qualitySetting()));
+    mark();
+    seg.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-q]'); if (!b) return;
+      store.set('quality', b.dataset.q);
+      mark();
+      const want = chooseQuality(tour);
+      if (want !== quality) switchQuality?.(want);
+    });
+  }
+  let switchQuality = null;
+
+  // ---- downloads, all in parallel
+  const progressBar = $('progress').firstElementChild;
+  const progressText = $('progressText');
+  const showProgress = (got, total) => {
+    if (!total) return;
+    $('progress').classList.remove('indeterminate');
+    progressBar.style.width = `${Math.min(100, (got / total) * 100).toFixed(1)}%`;
+    progressText.textContent = `${(got / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} ${T.mb}`;
+  };
+  $('progress').classList.add('indeterminate');
+  const splatFile = () => (quality === 'light' && tour.splatLite ? tour.splatLite : tour.splat);
+  const splatData = download(resolve(splatFile()), showProgress);
+  const collisionData = tour.collision
+    ? fetch(resolve(tour.collision)).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null)
+    : Promise.resolve(null);
+  const [pc, { default: RAPIER }] = await libs;
 
   // ---- PlayCanvas app
   const canvas = $('c');
@@ -171,7 +264,12 @@ async function main() {
   });
   app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW);
   app.setCanvasResolution(pc.RESOLUTION_AUTO);
-  app.graphicsDevice.maxPixelRatio = Math.min(window.devicePixelRatio, touch ? 1.5 : 2);
+  // adaptive resolution: drop the render scale when frames get slow, raise it again when there's room
+  const baseRatio = Math.min(window.devicePixelRatio || 1, touch ? 1.5 : 2);
+  let renderScale = quality === 'light' ? 0.85 : 1;
+  const minScale = Math.max(0.5, 0.75 / baseRatio);
+  const applyScale = () => { app.graphicsDevice.maxPixelRatio = baseRatio * renderScale; app.resizeCanvas(); };
+  applyScale();
   window.addEventListener('resize', () => app.resizeCanvas());
   app.start();
 
@@ -182,51 +280,51 @@ async function main() {
   });
   app.root.addChild(camera);
 
-  // ---- splat
-  const progressBar = $('progress').firstElementChild;
-  $('progress').classList.add('indeterminate');
-  const splatAsset = new pc.Asset('tour', 'gsplat', { url: resolve(tour.splat) });
-  splatAsset.on('progress', (got, total) => {
-    if (!total) return;
-    $('progress').classList.remove('indeterminate');
-    progressBar.style.width = `${Math.min(100, (got / total) * 100).toFixed(1)}%`;
-  });
-  const splatLoaded = new Promise((ok, fail) => {
-    splatAsset.ready(ok);
-    splatAsset.on('error', (e) => fail(new Error(`splat: ${e}`)));
-  });
-  app.assets.add(splatAsset);
-  app.assets.load(splatAsset);
+  const loadSplat = async (buf, file) => {
+    const asset = new pc.Asset(`tour-${file}`, 'gsplat', { url: resolve(file), filename: file, contents: buf });
+    await new Promise((ok, fail) => {
+      asset.ready(ok);
+      asset.on('error', (e) => fail(new Error(`splat: ${e}`)));
+      app.assets.add(asset);
+      app.assets.load(asset);
+    });
+    return asset;
+  };
 
-  // ---- physics + collision, in parallel with the splat download
-  const physicsReady = (async () => {
-    await RAPIER.init();
-    const world = new RAPIER.World({ x: 0, y: 0, z: 0 });
-    let tris = null;
-    if (tour.collision) {
-      try {
-        const r = await fetch(resolve(tour.collision));
-        if (r.ok) tris = parseGlbTriangles(await r.arrayBuffer());
-        else console.warn('No collision mesh found; walking on a flat floor.');
-      } catch (e) { console.warn('Collision mesh failed to load:', e); }
-    }
-    if (tris && tris.indices.length) {
-      world.createCollider(RAPIER.ColliderDesc.trimesh(tris.vertices, tris.indices));
-    } else {
-      // fallback: an infinite floor at y = 0 so the tour is still walkable
-      world.createCollider(RAPIER.ColliderDesc.cuboid(1000, 0.05, 1000).setTranslation(0, -0.05, 0));
-    }
-    return { world, tris };
-  })();
+  // ---- physics + collision
+  await RAPIER.init();
+  const world = new RAPIER.World({ x: 0, y: 0, z: 0 });
+  let tris = null;
+  try {
+    const buf = await collisionData;
+    if (buf) tris = parseGlbTriangles(buf);
+  } catch (e) { console.warn('Collision mesh failed to load:', e); }
+  if (tris && tris.indices.length) world.createCollider(RAPIER.ColliderDesc.trimesh(tris.vertices, tris.indices));
+  else world.createCollider(RAPIER.ColliderDesc.cuboid(1000, 0.05, 1000).setTranslation(0, -0.05, 0));
 
-  const [, phys] = await Promise.all([splatLoaded, physicsReady]);
+  let splatAsset = await loadSplat(await splatData, splatFile());
   const splat = new pc.Entity('splat');
   splat.addComponent('gsplat', { asset: splatAsset });
   splat.setEulerAngles(0, 0, 180);   // PLY/SOG data -> engine space (PlayCanvas convention)
   app.root.addChild(splat);
 
+  switchQuality = async (want) => {
+    const prev = quality;
+    quality = want;
+    $('qualitySeg').classList.add('busy');
+    try {
+      const file = splatFile();
+      const asset = await loadSplat(await download(resolve(file), () => {}), file);
+      const old = splatAsset;
+      splat.gsplat.asset = asset;
+      splatAsset = asset;
+      app.assets.remove(old); old.unload();
+      renderScale = Math.min(1, renderScale + (want === 'light' ? 0.15 : 0)); applyScale();
+    } catch (e) { console.warn(e); quality = prev; }
+    $('qualitySeg').classList.remove('busy');
+  };
+
   // ---- player
-  const { world } = phys;
   const R = tour.playerRadius;
   const HALF = Math.max(0.1, (1.75 - 2 * R) / 2);      // capsule ~1.75 m tall
   const CENTER = HALF + R;                              // feet -> capsule centre
@@ -240,23 +338,40 @@ async function main() {
   kcc.setMinSlopeSlideAngle((65 * Math.PI) / 180);
   kcc.setSlideEnabled(true);
 
-  const feet = new pc.Vec3();
-  let yaw = 0, pitch = 0, vy = 0, fly = false;
+  const feet = new pc.Vec3(), prevFeet = new pc.Vec3(), drawFeet = new pc.Vec3();
+  let yaw = 0, pitch = 0, vy = 0, fly = false, smoothEye = null;
+  const place = (x, y, z, yw = yaw, pt = 0) => {
+    feet.set(x, y + 0.02, z); prevFeet.copy(feet);
+    yaw = yw; pitch = pt; vy = 0; smoothEye = null;
+    body.setTranslation({ x, y: y + CENTER + 0.02, z }, true);
+    body.setNextKinematicTranslation({ x, y: y + CENTER + 0.02, z });
+  };
+  const startRoom = mapLarge && (mapLarge.room(tour.map.startRoom) ? tour.map.startRoom : null);
   const respawn = () => {
     const [x, y, z] = tour.spawn.position;
-    feet.set(x, y + 0.02, z);
-    yaw = tour.spawn.yaw || 0; pitch = tour.spawn.pitch || 0; vy = 0;
-    body.setNextKinematicTranslation({ x, y: y + CENTER + 0.02, z });
-    body.setTranslation({ x, y: y + CENTER + 0.02, z }, true);
+    place(x, y, z, tour.spawn.yaw || 0, tour.spawn.pitch || 0);
   };
   respawn();
+  goToRoom = (id) => {
+    const r = mapLarge?.room(id);
+    if (!r?.start) return;
+    const [x, y, z] = r.start.position;
+    place(x, y, z, r.start.yaw || 0, 0);
+    currentRoom = null;
+    start();
+  };
+  if (pendingRoom) {
+    const r = mapLarge?.rooms.find((q) => q.id === pendingRoom || (q.name || '').toLowerCase() === String(pendingRoom).toLowerCase());
+    if (r?.start) { const [x, y, z] = r.start.position; place(x, y, z, r.start.yaw || 0); }
+  }
+  void startRoom;
 
   // ---- debug collision overlay (edit mode, key G)
   let overlay = null;
-  if (EDIT && phys.tris) {
+  if (EDIT && tris) {
     const mesh = new pc.Mesh(app.graphicsDevice);
-    mesh.setPositions(phys.tris.vertices);
-    mesh.setIndices(phys.tris.indices);
+    mesh.setPositions(tris.vertices);
+    mesh.setIndices(tris.indices);
     mesh.update();
     mesh.generateWireframe();
     const mat = new pc.StandardMaterial();
@@ -279,6 +394,10 @@ async function main() {
     if (!active) return;
     keys.add(e.code);
     if (e.code === 'KeyR') respawn();
+    if (e.code === 'KeyM' && mapSmall) {
+      const hide = !$('mapSmall').classList.toggle('hidden');
+      store.set('minimap', hide ? 'on' : 'off');
+    }
     if (EDIT && e.code === 'KeyF') { fly = !fly; vy = 0; }
     if (EDIT && e.code === 'KeyG' && overlay) overlay.enabled = !overlay.enabled;
     if (EDIT && e.code === 'KeyP') {
@@ -330,42 +449,78 @@ async function main() {
   enter.disabled = false;
   $('enterLabel').textContent = touch ? T.tapEnter : T.enter;
   $('progress').classList.add('hidden');
-  const start = () => {
+  progressText.textContent = '';
+  document.body.classList.add('ready');
+  const showMini = () => { if (mapSmall && store.get('minimap') !== 'off') $('mapSmall').classList.remove('hidden'); };
+  function start() {
     active = true;
     intro.classList.add('hidden');
     $('hud').classList.remove('hidden');
+    showMini();
     if (touch) stickEl.classList.remove('hidden');
     else canvas.requestPointerLock?.();
-  };
+  }
+  function pause() {
+    active = false; keys.clear();
+    $('enterLabel').textContent = T.resume;
+    intro.classList.remove('hidden');
+    if (touch) stickEl.classList.add('hidden');
+    if (document.pointerLockElement) document.exitPointerLock?.();
+  }
   enter.addEventListener('click', start);
   canvas.addEventListener('click', () => { if (active && !touch && document.pointerLockElement !== canvas) canvas.requestPointerLock?.(); });
   document.addEventListener('pointerlockchange', () => {
-    if (!touch && document.pointerLockElement !== canvas && active && !EDIT) {
-      active = false; keys.clear();
-      $('enterLabel').textContent = T.resume;
-      intro.classList.remove('hidden');
-    }
+    if (!touch && document.pointerLockElement !== canvas && active && !EDIT) pause();
   });
 
-  $('badge').textContent = tour.title;
+  $('badgeTitle').textContent = tour.title;
   const hint = $('hint');
   hint.textContent = touch ? T.hintTouch : T.hint;
   setTimeout(() => { hint.style.opacity = 0; }, 7000);
   const flash = (msg) => { hint.textContent = msg; hint.style.opacity = 1; setTimeout(() => { hint.style.opacity = 0; }, 2500); };
   if (EDIT) $('dev').classList.remove('hidden');
 
+  // ---- rooms: which one are we in?
+  let currentRoom = null, toastT = null;
+  const updateRoom = () => {
+    if (!mapLarge) return;
+    const id = mapLarge.roomAt(feet.x, feet.y, feet.z);
+    if (id && id !== currentRoom) {
+      const changed = currentRoom !== null;
+      currentRoom = id;
+      const name = mapLarge.room(id)?.name || '';
+      $('badgeRoom').textContent = name;
+      $('badgeRoom').classList.toggle('hidden', !name);
+      if (changed && active && name) {
+        const t = $('roomToast');
+        t.textContent = name; t.classList.add('show');
+        clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 1800);
+      }
+    }
+    for (const m of [mapLarge, mapSmall]) {
+      m.current = currentRoom; m.feet = [drawFeet.x, drawFeet.y, drawFeet.z]; m.yaw = yaw;
+    }
+  };
+
   // ---- simulation
   const STEP = 1 / 60;
-  let acc = 0;
-  const forward = new pc.Vec3(), right = new pc.Vec3(), move = new pc.Vec3();
+  let acc = 0, ema = 1 / 60, lastAdjust = performance.now(), roomT = 0;
+  const forward = new pc.Vec3(), right = new pc.Vec3(), move = new pc.Vec3(), tmp = new pc.Vec3();
   const minY = tour.bounds ? tour.bounds.min[1] - 3 : -20;
-  let smoothEye = null;
 
   app.on('update', (dt) => {
     dt = Math.min(dt, 0.1);
+    // adaptive resolution (only while walking, and not more often than every 1.5 s)
+    ema = ema * 0.94 + dt * 0.06;
+    const now = performance.now();
+    if (active && now - lastAdjust > 1500) {
+      if (ema > 1 / 42 && renderScale > minScale) { renderScale = Math.max(minScale, renderScale - 0.1); applyScale(); lastAdjust = now; }
+      else if (ema < 1 / 57 && renderScale < 1 && now - lastAdjust > 5000) { renderScale = Math.min(1, renderScale + 0.05); applyScale(); lastAdjust = now; }
+    }
     acc += dt;
     while (acc >= STEP) {
       acc -= STEP;
+      prevFeet.copy(feet);
       const yr = (yaw * Math.PI) / 180;
       forward.set(-Math.sin(yr), 0, -Math.cos(yr));
       right.set(Math.cos(yr), 0, -Math.sin(yr));
@@ -381,12 +536,12 @@ async function main() {
       }
       const run = keys.has('ShiftLeft') || keys.has('ShiftRight');
       const speed = (run ? tour.runSpeed : tour.walkSpeed) * (fly ? 1.5 : 1);
-      move.set(0, 0, 0).add(forward.clone().mulScalar(f)).add(right.clone().mulScalar(s));
+      move.set(forward.x * f + right.x * s, 0, forward.z * f + right.z * s);
       if (move.length() > 1) move.normalize();
       move.mulScalar(speed * STEP);
 
       if (fly) {
-        feet.add(move).add(new pc.Vec3(0, u * speed * STEP, 0));
+        feet.add(move); feet.y += u * speed * STEP;
         body.setNextKinematicTranslation({ x: feet.x, y: feet.y + CENTER, z: feet.z });
       } else {
         vy = Math.max(vy - 9.81 * STEP, -20);
@@ -401,26 +556,34 @@ async function main() {
       }
       world.step();
     }
-    // smooth eye height so stair steps don't jolt the view
-    const eyeY = feet.y + tour.eyeHeight;
+    // draw between the last two physics steps: smooth motion at any refresh rate (no 60 Hz judder)
+    drawFeet.lerp(prevFeet, feet, acc / STEP);
+    const eyeY = drawFeet.y + tour.eyeHeight;
     smoothEye = smoothEye === null || fly ? eyeY : pc.math.lerp(smoothEye, eyeY, 1 - Math.exp(-dt * 14));
-    camera.setPosition(feet.x, smoothEye, feet.z);
+    camera.setPosition(drawFeet.x, smoothEye, drawFeet.z);
     camera.setEulerAngles(pitch, yaw, 0);
+    if ((roomT += dt) > 0.1) { roomT = 0; updateRoom(); }
     if (EDIT) {
       $('dev').textContent =
         `pos  ${feet.x.toFixed(2)} ${feet.y.toFixed(2)} ${feet.z.toFixed(2)}\nyaw  ${yaw.toFixed(0)}°   ${fly ? 'FLY' : 'walk'}\n` +
+        `room ${currentRoom || '-'}   ${quality}  scale ${renderScale.toFixed(2)}  ${(1 / ema).toFixed(0)} fps\n` +
         `F fly · G collision · P copy spawn`;
     }
+    void tmp;
   });
 
   // small scripting hook (used by tests and for embedding)
   window.__tour = {
-    app, tour, keys, respawn,
+    app, tour, keys, respawn, goToRoom,
     get feet() { return [feet.x, feet.y, feet.z]; },
     get view() { return { yaw, pitch }; },
+    get room() { return currentRoom; },
+    get quality() { return quality; },
+    get renderScale() { return renderScale; },
     setView: (y, p = 0) => { yaw = y; pitch = p; },
-    teleport: (x, y, z) => { feet.set(x, y, z); vy = 0; body.setTranslation({ x, y: y + CENTER, z }, true); body.setNextKinematicTranslation({ x, y: y + CENTER, z }); },
+    teleport: (x, y, z) => { place(x, y, z, yaw, pitch); },
     setActive: (v) => { active = v; },
+    pause, start,
   };
 }
 
