@@ -476,7 +476,7 @@ async function main() {
     $('hud').classList.remove('hidden');
     showMini();
     if (touch) stickEl.classList.remove('hidden');
-    else canvas.requestPointerLock?.();
+    else { $('keypad').classList.remove('hidden'); canvas.requestPointerLock?.(); }
   }
   function pause() {
     active = false; keys.clear();
@@ -530,6 +530,22 @@ async function main() {
   let acc = 0, ema = 1 / 60, lastAdjust = performance.now(), roomT = 0;
   const forward = new pc.Vec3(), right = new pc.Vec3(), move = new pc.Vec3(), tmp = new pc.Vec3();
   const minY = tour.bounds ? tour.bounds.min[1] - 3 : -20;
+
+  // light up the keys (and the joystick arrows) for the way you're moving
+  const dirEls = [...document.querySelectorAll('#keypad [data-dir], #stick [data-dir]')];
+  let dirState = '';
+  const showDirections = () => {
+    const k = (...c) => active && c.some((x) => keys.has(x));
+    const d = {
+      f: k('KeyW', 'ArrowUp') || stick.y < -0.35, b: k('KeyS', 'ArrowDown') || stick.y > 0.35,
+      l: k('KeyA', 'ArrowLeft') || stick.x < -0.35, r: k('KeyD', 'ArrowRight') || stick.x > 0.35,
+    };
+    const st = `${+d.f}${+d.b}${+d.l}${+d.r}`;
+    if (st === dirState) return;
+    dirState = st;
+    for (const el of dirEls) el.classList.toggle('on', d[el.dataset.dir]);
+    $('keypad').classList.toggle('active', st !== '0000');
+  };
 
   app.on('update', (dt) => {
     dt = Math.min(dt, 0.1);
@@ -585,6 +601,7 @@ async function main() {
     smoothEye = smoothEye === null || fly ? eyeY : pc.math.lerp(smoothEye, eyeY, 1 - Math.exp(-dt * 14));
     camera.setPosition(drawFeet.x, smoothEye, drawFeet.z);
     camera.setEulerAngles(pitch, yaw, 0);
+    showDirections();
     if ((roomT += dt) > 0.1) { roomT = 0; updateRoom(); }
     if (EDIT) {
       $('dev').textContent =
