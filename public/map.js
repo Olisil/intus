@@ -64,28 +64,54 @@ const pointInLoops = (loops, x, y) => {
   return c;
 };
 
+// Close the gaps the room detection leaves between rooms (it stops short of the walls): every
+// rectangle edge that faces another room within `reach` moves halfway towards it, leaving `wall`
+// between them (rectangles of the same room meet exactly). Idempotent; stairs are left alone.
+export function tightenRooms(rooms, wall = 0.12, reach = 0.7) {
+  const out = rooms.map((r) => ({ ...r, rects: (r.rects || []).map((q) => [...q]) }));
+  const items = [];
+  out.forEach((r) => { if (r.kind !== 'stairs') r.rects.forEach((q, k) => items.push({ r, q, o: [...rooms[out.indexOf(r)].rects[k]] })); });
+  const EDGES = [  // [edge index, facing edge index on the other rect, sign, span axes]
+    [2, 0, 1, 1, 3], [0, 2, -1, 1, 3], [3, 1, 1, 0, 2], [1, 3, -1, 0, 2],
+  ];
+  for (const A of items) {
+    for (const [e, f, sgn, s0, s1] of EDGES) {
+      let best = null;
+      for (const B of items) {
+        if (B === A || B.r.level !== A.r.level) continue;
+        const g = sgn * (B.o[f] - A.o[e]);
+        const overlap = Math.min(A.o[s1], B.o[s1]) - Math.max(A.o[s0], B.o[s0]);
+        if (overlap < 0.25 || g < -1e-6 || g > reach) continue;
+        const w = B.r === A.r ? 0 : wall;
+        if (!best || g < best.g) best = { g, w };
+      }
+      if (best && best.g > best.w + 1e-4) A.q[e] = +(A.o[e] + sgn * (best.g - best.w) / 2).toFixed(3);
+    }
+  }
+  return out;
+}
+
 export class TourMap {
-  constructor(canvas, map, { baseUrl = '', onPick = null, imageUrl = null } = {}) {
-    this.imageUrl = imageUrl;
+  constructor(canvas, map, { onPick = null } = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.onPick = onPick;
-    this.images = [];
     this.mode = 'small';
+    this.only = null;          // storey to show: null = automatic (large: all, small: the one you're on)
     this.hover = null;
     this.current = null;
     this.feet = null; this.yaw = 0;
     this.spin = 0; this.drag = null; this.userTurn = 0; this.lastInteract = 0;
     this.accent = '#e8dcc7';
-    this.setMap(map, baseUrl);
+    this.setMap(map);
     this._bind();
   }
 
-  setMap(map, baseUrl = '') {
+  setMap(map) {
     this.map = map;
-    const a = map.angle || 0;
     this.levels = map.levels || [];
-    this.rooms = (map.rooms || []).filter((r) => !r.hidden).map((r) => {
+    const rooms = tightenRooms((map.rooms || []).filter((r) => !r.hidden));
+    this.rooms = rooms.map((r) => {
       const loops = unionOutline(r.rects || []);
       const level = this.levels[r.level] || { y: 0, height: 2.5 };
       const top = r.kind === 'stairs' && this.levels[r.top] ? this.levels[r.top].y + this.levels[r.top].height : level.y + level.height;
@@ -93,33 +119,25 @@ export class TourMap {
       const big = [...(r.rects || [])].sort((p, q) => (q[2] - q[0]) * (q[3] - q[1]) - (p[2] - p[0]) * (p[3] - p[1]))[0] || [0, 0, 0, 0];
       return { ...r, loops, y0: level.y, y1: top, label: [(big[0] + big[2]) / 2, (big[1] + big[3]) / 2] };
     });
-    // extent of the house in the plan frame, for fitting
+    this.ext = this._extent(null);
+  }
+
+  _extent(level) {
     let u0 = Infinity, v0 = Infinity, u1 = -Infinity, v1 = -Infinity;
-    for (const r of this.rooms) for (const q of r.rects) { u0 = Math.min(u0, q[0]); v0 = Math.min(v0, q[1]); u1 = Math.max(u1, q[2]); v1 = Math.max(v1, q[3]); }
-    if (!isFinite(u0)) for (const l of this.levels) { [u0, v0, u1, v1] = l.bounds; }
-    this.ext = [u0, v0, u1, v1];
-    const prev = this.images || [];
-    this.images = this.levels.map((l, i) => {
-      if (!l.image) return null;
-      if (prev[i] && prev[i]._file === l.image) return prev[i];
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img._file = l.image;
-      img.onload = () => { this.dirty = true; };
-      img.src = this.imageUrl ? this.imageUrl(l.image) : baseUrl ? new URL(l.image, baseUrl).href : l.image;
-      return img;
-    });
-    this.dirty = true;
+    for (const r of this.rooms) {
+      if (level !== null && r.level !== level) continue;
+      for (const q of r.rects) { u0 = Math.min(u0, q[0]); v0 = Math.min(v0, q[1]); u1 = Math.max(u1, q[2]); v1 = Math.max(v1, q[3]); }
+    }
+    if (!isFinite(u0)) return level !== null ? this._extent(null) : (this.levels[0]?.bounds || [-5, -5, 5, 5]);
+    return [u0, v0, u1, v1];
   }
 
   // which room is a position in (feet in tour space)?
   roomAt(x, y, z) {
     const a = this.map.angle || 0;
     const [u, v] = toPlan(a, x, z);
-    const lv = this.levels;
-    let li = 0;
-    for (let i = 0; i < lv.length; i++) if (y >= lv[i].y - 0.3) li = i;
-    const onFloor = lv.length ? Math.abs(y - lv[li].y) < 0.2 : true;
+    const li = this.levelAt(y);
+    const onFloor = this.levels.length ? Math.abs(y - this.levels[li].y) < 0.2 : true;
     const inRoom = (r) => r.rects.some((q) => u >= q[0] && u <= q[2] && v >= q[1] && v <= q[3]);
     if (!onFloor) {
       const s = this.rooms.find((r) => r.kind === 'stairs' && y > r.y0 - 0.1 && y < r.y1 && inRoom(r));
@@ -130,68 +148,70 @@ export class TourMap {
     return r ? r.id : null;
   }
 
+  levelAt(y) {
+    let li = 0;
+    this.levels.forEach((l, i) => { if (y >= l.y - 0.3) li = i; });
+    return li;
+  }
+
   room(id) { return this.rooms.find((r) => r.id === id) || null; }
 
+  // the storey you're on (on stairs: the one the stairs start from)
+  get hereLevel() {
+    const cur = this.room(this.current);
+    if (cur?.kind === 'stairs') return cur.level;
+    return this.feet ? this.levelAt(this.feet[1]) : (cur ? cur.level : 0);
+  }
+
   // ------------------------------------------------------------ view
-  _view(w, h, only = null) {
+  _view(w, h, shown) {
     const large = this.mode === 'large';
     const a = this.map.angle || 0;
-    // look at the house square-on to its walls, turned a little so it reads as 3D
-    const auto = large ? Math.sin(this.spin * 0.25) * 0.35 : 0;
-    const phi = -a + 0.5 + auto + this.userTurn;
-    const elev = large ? 0.5 : 0.85;      // radians above the horizon
-    const gap = large ? 3.2 : 0;          // extra space between storeys (exploded view)
-    const shown = only === null ? this.levels.map((_, i) => i) : [only];
-    let [u0, v0, u1, v1] = this.ext;
-    if (only !== null) {  // fit the storey you're on
-      const rs = this.rooms.filter((r) => r.level === only);
-      if (rs.length) {
-        u0 = Math.min(...rs.flatMap((r) => r.rects.map((q) => q[0]))); v0 = Math.min(...rs.flatMap((r) => r.rects.map((q) => q[1])));
-        u1 = Math.max(...rs.flatMap((r) => r.rects.map((q) => q[2]))); v1 = Math.max(...rs.flatMap((r) => r.rects.map((q) => q[3])));
-      }
+    let phi, elev;
+    if (large) {
+      // square-on to the walls, turned a little so it reads as 3D; drifts slowly until you touch it
+      phi = -a + 0.5 + Math.sin(this.spin * 0.25) * 0.35 + this.userTurn;
+      elev = 0.5;
+    } else {
+      // heading-up: the way you look always points up on the map
+      phi = (this.yaw * Math.PI) / 180;
+      elev = 0.9;
     }
+    const gap = large && shown.length > 1 ? 3.2 : 0;   // extra space between storeys (exploded view)
+    const [u0, v0, u1, v1] = shown.length === 1 ? this._extent(shown[0]) : this.ext;
     const [cx, cz] = fromPlan(a, (u0 + u1) / 2, (v0 + v1) / 2);
-    const ys = shown.map((i) => this.levels[i].y + i * gap);
-    const yMid = ys.length ? (Math.min(...ys) + Math.max(...ys) + (this.levels[shown.at(-1)]?.height || 2.5)) / 2 : 1.2;
+    const off = (li) => (gap ? li * gap : 0);
+    const ys = shown.map((i) => this.levels[i].y + off(i));
+    const yMid = (Math.min(...ys) + Math.max(...ys) + (this.levels[shown.at(-1)]?.height || 2.5)) / 2;
     const cp = Math.cos(phi), sp = Math.sin(phi), se = Math.sin(elev), ce = Math.cos(elev);
     const proj = (x, y, z, li = 0) => {
-      const dx = x - cx, dz = z - cz, dy = y + (li || 0) * gap - yMid;
+      const dx = x - cx, dz = z - cz, dy = y + off(li) - yMid;
       const rx = dx * cp - dz * sp, rz = dx * sp + dz * cp;
       return [rx, rz * se - dy * ce];
     };
-    // fit: project the corners of the house at all heights
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    this.levels.forEach((l, li) => {
-      if (!shown.includes(li)) return;
-      for (const [u, v] of [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]) {
-        const [x, z] = fromPlan(a, u, v);
-        for (const y of [l.y, l.y + l.height]) {
-          const [px, py] = proj(x, y, z, li);
-          x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+    let x0, y0, x1, y1;
+    if (large) {
+      x0 = y0 = Infinity; x1 = y1 = -Infinity;
+      for (const li of shown) {
+        const l = this.levels[li];
+        for (const [u, v] of [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]) {
+          const [x, z] = fromPlan(a, u, v);
+          for (const y of [l.y, l.y + l.height]) {
+            const [px, py] = proj(x, y, z, li);
+            x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+          }
         }
       }
-    });
-    const pad = large ? 0.1 : 0.08;
+    } else {
+      // fit a circle round the storey, so the scale stays put while the map turns with you
+      const r = Math.hypot(u1 - u0, v1 - v0) / 2 + 0.3;
+      const hh = (this.levels[shown[0]]?.height || 2.5) * ce / 2;
+      x0 = -r; x1 = r; y0 = -r * se - hh; y1 = r * se + hh;
+    }
+    const pad = large ? 0.1 : 0.06;
     const s = Math.min(w * (1 - 2 * pad) / (x1 - x0 || 1), h * (1 - 2 * pad) / (y1 - y0 || 1));
     const ox = w / 2 - s * (x0 + x1) / 2, oy = h / 2 - s * (y0 + y1) / 2;
-    return {
-      a, gap, s, phi, se, ce,
-      P: (x, y, z, li) => { const [px, py] = proj(x, y, z, li); return [ox + s * px, oy + s * py]; },
-      // the plan -> screen mapping of a storey's floor is affine (orthographic view)
-      floorTransform: (li) => {
-        const l = this.levels[li];
-        const o = this._plan2screen(a, l.bounds[0], l.bounds[1], l.y, li, proj, ox, oy, s);
-        const ou = this._plan2screen(a, l.bounds[0] + 1, l.bounds[1], l.y, li, proj, ox, oy, s);
-        const ov = this._plan2screen(a, l.bounds[0], l.bounds[1] + 1, l.y, li, proj, ox, oy, s);
-        return [ou[0] - o[0], ou[1] - o[1], ov[0] - o[0], ov[1] - o[1], o[0], o[1]];
-      },
-    };
-  }
-
-  _plan2screen(a, u, v, y, li, proj, ox, oy, s) {
-    const [x, z] = fromPlan(a, u, v);
-    const [px, py] = proj(x, y, z, li);
-    return [ox + s * px, oy + s * py];
+    return { a, s, P: (x, y, z, li) => { const [px, py] = proj(x, y, z, li); return [ox + s * px, oy + s * py]; } };
   }
 
   // ------------------------------------------------------------ drawing
@@ -202,76 +222,55 @@ export class TourMap {
     if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
       c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
     }
-    if (this.mode === 'large' && performance.now() - this.lastInteract > 2500 && !this.drag) this.spin += dt;
+    const large = this.mode === 'large';
+    if (large && performance.now() - this.lastInteract > 2500 && !this.drag) this.spin += dt;
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     if (!this.levels.length) return;
-    const large = this.mode === 'large';
-    const curRoom = this.room(this.current);
-    const curLevel = this.feet && !(curRoom?.kind === 'stairs') ? this._levelOf(this.feet[1]) : (curRoom ? curRoom.level : 0);
-    const V = this._view(w, h, large ? null : curLevel);
-    this.V = V;
+    const here = this.hereLevel;
+    const shown = this.only !== null && this.only !== undefined && this.levels[this.only] ? [this.only]
+      : large ? this.levels.map((_, i) => i) : [here];
+    this.shown = shown;
+    const V = this._view(w, h, shown);
     const a = V.a;
+    const k = large ? 1 : 0.85;   // line weight
     this.screenRooms = [];
-    this.levels.forEach((l, li) => {
-      if (!large && li !== curLevel) return;
-      const fade = 1;
-      // floor picture
-      const img = this.images[li];
-      if (img && img.complete && img.naturalWidth) {
-        const [b0, b1, b2, b3] = l.bounds;
-        const m = V.floorTransform(li);
-        ctx.save();
-        ctx.globalAlpha = (large ? 0.85 : 0.55) * fade;
-        ctx.setTransform(dpr * m[0] * (b2 - b0) / img.naturalWidth, dpr * m[1] * (b2 - b0) / img.naturalWidth,
-          dpr * m[2] * (b3 - b1) / img.naturalHeight, dpr * m[3] * (b3 - b1) / img.naturalHeight, dpr * m[4], dpr * m[5]);
-        ctx.drawImage(img, 0, 0);
-        ctx.restore();
-      }
+    for (const li of shown) {
       for (const r of this.rooms) {
         if (r.level !== li) continue;
         const isCur = r.id === this.current, isHover = r.id === this.hover;
         const floorPts = r.loops.map((loop) => loop.map(([u, v]) => { const [x, z] = fromPlan(a, u, v); return V.P(x, r.y0, z, li); }));
         const stairs = r.kind === 'stairs' && this.levels[r.top];
         const ceilY = stairs ? this.levels[r.top].y : r.y1;   // a staircase box reaches the floor above
-        const topLi = stairs ? r.top : li;
+        const topLi = stairs && shown.includes(r.top) ? r.top : li;
         const ceilPts = r.loops.map((loop) => loop.map(([u, v]) => { const [x, z] = fromPlan(a, u, v); return V.P(x, ceilY, z, topLi); }));
         this.screenRooms.push({ id: r.id, loops: floorPts, level: li });
-        // fill
         if (isCur || isHover) {
           ctx.beginPath();
-          for (const loop of floorPts) loop.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-          ctx.closePath();
-          ctx.fillStyle = isCur ? `rgba(232,220,199,${large ? 0.3 : 0.42})` : 'rgba(232,220,199,0.16)';
+          for (const loop of floorPts) { loop.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); }
+          ctx.fillStyle = isCur ? 'rgba(232,220,199,0.26)' : 'rgba(232,220,199,0.14)';
           ctx.fill('evenodd');
         }
         const strong = isCur || isHover;
-        ctx.lineJoin = 'round';
-        // vertical edges and ceiling: the "wire" of the house
-        ctx.strokeStyle = `rgba(244,241,236,${(strong ? 0.75 : large ? 0.32 : 0.22) * fade})`;
-        ctx.lineWidth = strong ? 1.2 : 0.8;
+        ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        // walls and ceiling: faint wires
+        ctx.strokeStyle = `rgba(244,241,236,${strong ? 0.38 : 0.13})`;
+        ctx.lineWidth = 0.8;
         ctx.beginPath();
-        floorPts.forEach((loop, k) => loop.forEach(([x, y], i) => { ctx.moveTo(x, y); ctx.lineTo(...ceilPts[k][i]); }));
+        floorPts.forEach((loop, n) => loop.forEach(([x, y], i) => { ctx.moveTo(x, y); ctx.lineTo(...ceilPts[n][i]); }));
         for (const loop of ceilPts) { loop.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); }
         ctx.stroke();
-        // floor outline
-        ctx.strokeStyle = strong ? this.accent : `rgba(244,241,236,${0.7 * fade})`;
-        ctx.lineWidth = strong ? 2 : 1.1;
+        // the floor outline is what matters: strong
+        ctx.strokeStyle = strong ? this.accent : 'rgba(244,241,236,0.85)';
+        ctx.lineWidth = (strong ? 2.8 : 1.8) * k;
         ctx.beginPath();
         for (const loop of floorPts) { loop.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); }
         ctx.stroke();
       }
-      // you are here
-      if (this.feet && li === curLevel) this._drawMe(V, li);
-    });
-    if (large) this._drawLabels(V);
-  }
-
-  _levelOf(y) {
-    let li = 0;
-    this.levels.forEach((l, i) => { if (y >= l.y - 0.3) li = i; });
-    return li;
+      if (this.feet && li === here) this._drawMe(V, li);
+    }
+    if (large) this._drawLabels(V, shown);
   }
 
   _drawMe(V, li) {
@@ -280,13 +279,13 @@ export class TourMap {
     const [px, py] = V.P(x, y, z, li);
     const yr = (this.yaw * Math.PI) / 180;
     const fx = -Math.sin(yr), fz = -Math.cos(yr);
-    const L = 1.6, spread = 0.5;
+    const L = 1.8, spread = 0.5;
     const tip = (ang) => {
       const c = Math.cos(ang), s = Math.sin(ang);
       return V.P(x + (fx * c - fz * s) * L, y, z + (fx * s + fz * c) * L, li);
     };
     const g = ctx.createRadialGradient(px, py, 0, px, py, V.s * L);
-    g.addColorStop(0, 'rgba(232,220,199,0.55)');
+    g.addColorStop(0, 'rgba(232,220,199,0.7)');
     g.addColorStop(1, 'rgba(232,220,199,0)');
     ctx.fillStyle = g;
     ctx.beginPath();
@@ -295,7 +294,7 @@ export class TourMap {
     ctx.closePath();
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(px, py, this.mode === 'large' ? 5.5 : 4, 0, Math.PI * 2);
+    ctx.arc(px, py, this.mode === 'large' ? 5.5 : 4.5, 0, Math.PI * 2);
     ctx.fillStyle = '#fff';
     ctx.fill();
     ctx.lineWidth = 2;
@@ -303,7 +302,7 @@ export class TourMap {
     ctx.stroke();
   }
 
-  _drawLabels(V) {
+  _drawLabels(V, shown) {
     const ctx = this.ctx;
     const a = V.a;
     ctx.font = '500 12px Inter, system-ui, sans-serif';
@@ -311,6 +310,7 @@ export class TourMap {
     ctx.textBaseline = 'middle';
     const placed = [];
     for (const r of this.rooms) {
+      if (!shown.includes(r.level)) continue;
       const [x, z] = fromPlan(a, r.label[0], r.label[1]);
       const [px, py] = V.P(x, r.y0 + 0.05, z, r.level);
       const text = r.name || '';
@@ -328,7 +328,7 @@ export class TourMap {
     }
   }
 
-  // ------------------------------------------------------------ interaction (large mode)
+  // ------------------------------------------------------------ interaction
   pick(x, y) {
     const hits = (this.screenRooms || []).filter((r) => pointInLoops(r.loops, x, y));
     hits.sort((p, q) => q.level - p.level);  // upper storeys are drawn on top
@@ -339,29 +339,25 @@ export class TourMap {
     const c = this.canvas;
     const pos = (e) => { const r = c.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
     c.addEventListener('pointermove', (e) => {
-      if (this.mode !== 'large') return;
       this.lastInteract = performance.now();
-      if (this.drag) {
+      if (this.drag && this.mode === 'large') {
         const dx = e.clientX - this.drag.x;
         if (Math.abs(dx) > 3) this.drag.moved = true;
-        this.userTurn = this.drag.turn + dx * 0.006;
+        this.userTurn = this.drag.turn - dx * 0.006;   // the house turns with the pointer
         return;
       }
       const id = this.pick(...pos(e));
-      if (id !== this.hover) { this.hover = id; c.style.cursor = id ? 'pointer' : 'grab'; }
+      if (id !== this.hover) { this.hover = id; c.style.cursor = id ? 'pointer' : this.mode === 'large' ? 'grab' : 'pointer'; }
     });
     c.addEventListener('pointerleave', () => { this.hover = null; });
     c.addEventListener('pointerdown', (e) => {
-      if (this.mode !== 'large') return;
       this.drag = { x: e.clientX, turn: this.userTurn, moved: false };
-      c.setPointerCapture?.(e.pointerId);
+      if (this.mode === 'large') c.setPointerCapture?.(e.pointerId);
     });
     c.addEventListener('pointerup', (e) => {
-      if (this.mode !== 'large') { this.onPick?.(null, 'small'); return; }
       const d = this.drag; this.drag = null;
       if (d && d.moved) return;
-      const id = this.pick(...pos(e));
-      if (id) this.onPick?.(id, 'large');
+      this.onPick?.(this.pick(...pos(e)), this.mode);
     });
   }
 }

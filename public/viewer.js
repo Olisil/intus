@@ -30,7 +30,7 @@ const STRINGS = {
     move: 'Move', look: 'Look around', run: 'Walk faster', reset: 'Back to start', exit: 'Pause', map: 'Map',
     drag: 'Drag', stick: 'Joystick', hint: 'WASD to walk · mouse to look · Esc to pause',
     hintTouch: 'Joystick to walk · drag to look', mouse: 'Mouse',
-    err: 'The tour files could not be loaded.', goTo: 'Go to', floor: 'Floor',
+    err: 'The tour files could not be loaded.', goTo: 'Go to', floor: 'Floor', wholeHouse: 'Whole house',
     mapHint: 'Click a room to go there · drag to turn the house', mapHintTouch: 'Tap a room to go there',
     quality: 'Quality', qAuto: 'Auto', qHigh: 'High', qLight: 'Light', mb: 'MB',
   },
@@ -39,7 +39,7 @@ const STRINGS = {
     move: 'Gå', look: 'Se dig omkring', run: 'Gå snabbare', reset: 'Till början', exit: 'Paus', map: 'Karta',
     drag: 'Dra', stick: 'Styrspak', hint: 'WASD för att gå · musen för att titta · Esc för paus',
     hintTouch: 'Styrspak för att gå · dra för att titta', mouse: 'Mus',
-    err: 'Visningens filer kunde inte laddas.', goTo: 'Gå till', floor: 'Våning',
+    err: 'Visningens filer kunde inte laddas.', goTo: 'Gå till', floor: 'Våning', wholeHouse: 'Hela huset',
     mapHint: 'Klicka på ett rum för att gå dit · dra för att vrida huset', mapHintTouch: 'Tryck på ett rum för att gå dit',
     quality: 'Kvalitet', qAuto: 'Auto', qHigh: 'Hög', qLight: 'Lätt', mb: 'MB',
   },
@@ -188,18 +188,29 @@ async function main() {
   let goToRoom = null;  // set once the player exists
   if (tour.map && tour.map.rooms?.length) {
     const pick = (id, from) => {
-      if (from === 'small') { pause(); return; }
+      if (!id) { if (from === 'small') pause(); return; }
       if (goToRoom) goToRoom(id); else { pendingRoom = id; mapLarge.current = id; }
     };
-    mapLarge = new TourMap($('mapLarge'), tour.map, { baseUrl: tourUrl, onPick: pick });
+    mapLarge = new TourMap($('mapLarge'), tour.map, { onPick: pick });
     mapLarge.mode = 'large';
-    mapSmall = new TourMap($('mapSmall'), tour.map, { baseUrl: tourUrl, onPick: pick });
+    mapSmall = new TourMap($('mapSmall'), tour.map, { onPick: pick });
     mapSmall.mode = 'small';
+    // storey pickers: the big map (whole house before you enter, your storey once inside) and the small one
+    const levels = tour.map.levels || [];
+    if (levels.length > 1) {
+      const opts = levels.map((_, i) => `<option value="${i}">${T.floor} ${i + 1}</option>`).join('');
+      $('mapFloor').innerHTML = `<option value="all">${T.wholeHouse}</option>` + opts;
+      $('miniFloor').innerHTML = opts;
+      $('mapFloor').classList.remove('hidden');
+      $('miniFloor').classList.remove('hidden');
+      $('mapFloor').addEventListener('change', (e) => { mapLarge.only = e.target.value === 'all' ? null : +e.target.value; });
+      $('miniFloor').addEventListener('change', (e) => { mapSmall.only = +e.target.value; mapSmall.pinnedFrom = mapSmall.hereLevel; });
+      for (const el of [$('mapFloor'), $('miniFloor')]) el.addEventListener('pointerdown', (e) => e.stopPropagation());
+    }
     $('introMap').classList.remove('hidden');
     $('intro').classList.add('with-map');
     $('mapHint').textContent = touch ? T.mapHintTouch : T.mapHint;
     // room buttons, by storey
-    const levels = tour.map.levels || [];
     const rooms = mapLarge.rooms;
     const groups = levels.map((_, li) => rooms.filter((r) => r.level === li));
     $('roomList').innerHTML = groups.map((g, li) => !g.length ? '' :
@@ -211,11 +222,17 @@ async function main() {
     $('roomList').addEventListener('mouseover', (e) => { const b = e.target.closest('[data-room]'); mapLarge.hover = b ? b.dataset.room : null; });
     $('roomList').addEventListener('mouseleave', () => { mapLarge.hover = null; });
   }
-  let last = performance.now(), lastSmall = 0;
+  let last = performance.now();
   const mapLoop = (now) => {
     const dt = Math.min(0.1, (now - last) / 1000); last = now;
     if (mapLarge && !$('intro').classList.contains('hidden')) mapLarge.draw(dt);
-    else if (mapSmall && !$('mapSmall').classList.contains('hidden') && now - lastSmall > 50) { mapSmall.draw(dt); lastSmall = now; }
+    else if (mapSmall && !$('miniWrap').classList.contains('hidden')) {
+      // the small map follows you onto another storey unless you picked one to look at
+      const here = mapSmall.hereLevel;
+      if (mapSmall.only !== null && mapSmall.pinnedFrom !== here) mapSmall.only = null;
+      if (document.activeElement !== $('miniFloor')) $('miniFloor').value = String(mapSmall.only ?? here);
+      mapSmall.draw(dt);
+    }
     requestAnimationFrame(mapLoop);
   };
   requestAnimationFrame(mapLoop);
@@ -395,8 +412,8 @@ async function main() {
     keys.add(e.code);
     if (e.code === 'KeyR') respawn();
     if (e.code === 'KeyM' && mapSmall) {
-      const hide = !$('mapSmall').classList.toggle('hidden');
-      store.set('minimap', hide ? 'on' : 'off');
+      const shown = !$('miniWrap').classList.toggle('hidden');
+      store.set('minimap', shown ? 'on' : 'off');
     }
     if (EDIT && e.code === 'KeyF') { fly = !fly; vy = 0; }
     if (EDIT && e.code === 'KeyG' && overlay) overlay.enabled = !overlay.enabled;
@@ -451,9 +468,10 @@ async function main() {
   $('progress').classList.add('hidden');
   progressText.textContent = '';
   document.body.classList.add('ready');
-  const showMini = () => { if (mapSmall && store.get('minimap') !== 'off') $('mapSmall').classList.remove('hidden'); };
+  const showMini = () => { if (mapSmall && store.get('minimap') !== 'off') $('miniWrap').classList.remove('hidden'); };
+  let entered = false;
   function start() {
-    active = true;
+    active = true; entered = true;
     intro.classList.add('hidden');
     $('hud').classList.remove('hidden');
     showMini();
@@ -462,8 +480,13 @@ async function main() {
   }
   function pause() {
     active = false; keys.clear();
+    if (mapLarge && entered) {  // inside the tour: the big map shows the storey you're on
+      mapLarge.only = mapLarge.hereLevel;
+      if ($('mapFloor').options.length) $('mapFloor').value = String(mapLarge.only);
+    }
     $('enterLabel').textContent = T.resume;
     intro.classList.remove('hidden');
+    $('hud').classList.add('hidden');
     if (touch) stickEl.classList.add('hidden');
     if (document.pointerLockElement) document.exitPointerLock?.();
   }

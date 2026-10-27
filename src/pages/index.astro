@@ -43,6 +43,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
     </div>
     <div class="intro-map hidden" id="introMap">
       <canvas id="mapLarge"></canvas>
+      <select id="mapFloor" class="floor-select hidden" aria-label="Floor"></select>
       <p class="map-hint" id="mapHint"></p>
     </div>
   </div>
@@ -57,7 +58,10 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
   <div class="room-toast" id="roomToast"></div>
   <div class="hint" id="hint"></div>
   <div class="dev hidden" id="dev"></div>
-  <canvas id="mapSmall" class="mini hidden"></canvas>
+  <div class="mini-wrap hidden" id="miniWrap">
+    <canvas id="mapSmall" class="mini"></canvas>
+    <select id="miniFloor" class="floor-select mini-floor hidden" aria-label="Floor"></select>
+  </div>
 </div>
 
 <!-- Touch controls -->

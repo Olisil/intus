@@ -80,6 +80,14 @@ body:not(.ready) .room-chip { opacity: .55; }
   font: 300 clamp(26px, 4vw, 40px)/1.1 Fraunces, Georgia, serif; letter-spacing: -0.01em; text-shadow: 0 2px 18px rgba(0,0,0,.55);
   transition: opacity .5s ease, transform .5s ease; white-space: nowrap; }
 .room-toast.show { opacity: 1; transform: translate(-50%, 0); }
-.mini { position: absolute; inset: auto 16px 16px auto; width: 250px; height: 190px; pointer-events: auto; cursor: pointer;
+.mini-wrap { position: absolute; right: 16px; bottom: 16px; width: 250px; height: 210px; pointer-events: auto; }
+.mini { position: absolute; inset: 0; width: 100%; height: 100%; cursor: pointer;
   border-radius: 16px; background: rgba(13,13,14,.42); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-@media (max-width: 760px) { .mini { width: 156px; height: 124px; inset: auto 12px 12px auto; border-radius: 12px; } }
+.floor-select { position: absolute; z-index: 2; appearance: none; -webkit-appearance: none; cursor: pointer;
+  padding: 6px 28px 6px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink);
+  background: rgba(18,18,20,.72) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23f4f1ec' stroke-width='1.4'/%3E%3C/svg%3E") no-repeat right 11px center;
+  font: 500 12px/1.2 Inter, system-ui, sans-serif; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.floor-select option { background: #18181a; color: var(--ink); }
+.intro-map .floor-select { top: 4px; left: 50%; transform: translateX(-50%); }
+.mini-floor { top: 8px; left: 8px; padding: 4px 24px 4px 10px; font-size: 11px; background-position: right 9px center; }
+@media (max-width: 760px) { .mini-wrap { width: 160px; height: 140px; right: 12px; bottom: 12px; } .mini { border-radius: 12px; } }
