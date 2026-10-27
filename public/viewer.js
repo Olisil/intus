@@ -11,6 +11,7 @@
 //   ?lang=sv|en      force UI language
 
 import { TourMap } from './map.js';
+import { buildKeypad, buildStick } from './controls.js';
 
 // Start downloading the engine and physics right away, in parallel with the tour itself.
 const libs = Promise.all([import('./lib/playcanvas.mjs'), import('./lib/rapier.mjs')]);
@@ -437,6 +438,8 @@ async function main() {
 
   // touch: joystick on the left, drag anywhere else to look
   const stickEl = $('stick'), knob = $('knob');
+  buildStick(stickEl);
+  buildKeypad($('keypad'));
   let stickId = null, lookId = null, lx = 0, ly = 0;
   const stickMove = (t) => {
     const r = stickEl.getBoundingClientRect();
@@ -444,7 +447,7 @@ async function main() {
     let y = (t.clientY - (r.top + r.height / 2)) / (r.height / 2);
     const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m; }
     stick.x = x; stick.y = y;
-    knob.style.transform = `translate(${x * 36}px, ${y * 36}px)`;
+    knob.style.transform = `translate(${x * 24}px, ${y * 24}px)`;
   };
   stickEl.addEventListener('touchstart', (e) => { e.preventDefault(); stickId = e.changedTouches[0].identifier; stickMove(e.changedTouches[0]); }, { passive: false });
   canvas.addEventListener('touchstart', (e) => { const t = e.changedTouches[0]; lookId = t.identifier; lx = t.clientX; ly = t.clientY; }, { passive: true });

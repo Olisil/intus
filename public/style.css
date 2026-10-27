@@ -93,22 +93,27 @@ body:not(.ready) .room-chip { opacity: .55; }
 @media (max-width: 760px) { .mini-wrap { width: 160px; height: 140px; right: 12px; bottom: 12px; } .mini { border-radius: 12px; } }
 
 /* ---- movement keys (desktop) and joystick arrows (touch) ---- */
-.keypad { position: absolute; left: 16px; bottom: 16px; display: flex; gap: 12px; padding: 12px; border-radius: 16px;
-  background: rgba(13,13,14,.38); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  opacity: .78; transition: opacity .4s; }
+.keypad { position: absolute; left: 12px; bottom: 8px; width: 220px; opacity: .85; transition: opacity .4s;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,.55)); }
 .keypad.active { opacity: 1; }
-.kp-group { display: grid; grid-template-areas: ". u ." "l d r"; grid-template-columns: repeat(3, 34px); grid-auto-rows: 34px; gap: 5px; }
-.kp { display: grid; place-items: center; border-radius: 9px; border: 1px solid rgba(244,241,236,.22);
-  background: linear-gradient(rgba(244,241,236,.07), rgba(244,241,236,.02)); color: var(--muted);
-  font: 500 13px/1 Inter, system-ui, sans-serif; box-shadow: 0 2px 0 rgba(0,0,0,.35);
-  transition: background .12s, color .12s, border-color .12s, transform .08s, box-shadow .12s; }
-.kp svg { width: 12px; height: 12px; display: block; }
-.kp.on { background: var(--accent); border-color: var(--accent); color: #141414; transform: translateY(1px);
-  box-shadow: 0 1px 0 rgba(0,0,0,.35), 0 0 18px rgba(232,220,199,.45); }
-.st-arrow { position: absolute; z-index: 2; width: 14px; height: 14px; color: rgba(244,241,236,.8); transition: color .12s, filter .12s; pointer-events: none; filter: drop-shadow(0 1px 2px rgba(0,0,0,.6)); }
-.st-arrow svg { width: 14px; height: 14px; display: block; }
-.st-arrow.on { color: #fff; filter: drop-shadow(0 0 7px rgba(232,220,199,.95)); }
+.keypad svg { display: block; width: 100%; height: auto; overflow: visible; }
+.keypad .shape { fill: rgba(13,13,14,.28); stroke: rgba(244,241,236,.92); stroke-width: 2.4; stroke-linejoin: round;
+  transition: fill .12s, stroke .12s; }
+.keypad text { fill: #f4f1ec; font: 500 19px Inter, system-ui, sans-serif; transition: fill .12s; }
+.keypad .tri { fill: #f4f1ec; transition: fill .12s; }
+.keypad .key.on .shape { fill: var(--accent); stroke: var(--accent); }
+.keypad .key.on text, .keypad .key.on .tri { fill: #141414; }
+.keypad .key.on { filter: drop-shadow(0 0 10px rgba(232,220,199,.55)); }
+.stick-art { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,.55)); }
+.stick-art .ring-bg { fill: rgba(13,13,14,.3); }
+.stick-art .outline { fill: none; stroke: rgba(244,241,236,.95); stroke-width: 2.2; stroke-linejoin: round; }
+.stick-art .fill { fill: rgba(13,13,14,.3); transition: fill .12s; }
+.stick-art .fill.on { fill: var(--accent); }
+#stick { background: transparent !important; border: 0 !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+  width: 132px !important; height: 132px !important; }
+#knob { width: 34px !important; height: 34px !important; margin: -17px 0 0 -17px !important; background: rgba(244,241,236,.9) !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,.5); }
 #knob { z-index: 1; }
-#stick { background: rgba(13,13,14,.42); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 @media (max-width: 760px) { .hint { bottom: auto; top: 64px; max-width: calc(100vw - 32px); white-space: normal; text-align: center; } }
 @media (max-width: 760px), (max-height: 520px) { .keypad { display: none; } }
