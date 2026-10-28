@@ -35,7 +35,7 @@ const STRINGS = {
     lookShort: 'Look', tilt: 'Tilt phone',
     gyro: 'Look around by moving your phone', gyroOn: 'Move your phone to look around', gyroOff: 'Drag to look around',
     gyroNone: "This phone doesn't report how it's turned", gyroDenied: 'Motion access was not allowed',
-    err: 'The tour files could not be loaded.', goTo: 'Go to', floor: 'Floor', wholeHouse: 'Whole house',
+    err: 'The tour files could not be loaded.', start: 'Start', goTo: 'Go to', floor: 'Floor', wholeHouse: 'Whole house',
     mapHint: 'Click a room to go there · drag to turn the house', mapHintTouch: 'Tap a room to go there',
     quality: 'Quality', qAuto: 'Auto', qHigh: 'High', qLight: 'Light', mb: 'MB',
   },
@@ -47,7 +47,7 @@ const STRINGS = {
     lookShort: 'Titta', tilt: 'Vrid mobilen',
     gyro: 'Titta runt genom att röra telefonen', gyroOn: 'Rör telefonen för att se dig omkring', gyroOff: 'Dra för att se dig omkring',
     gyroNone: 'Telefonen rapporterar inte hur den vrids', gyroDenied: 'Åtkomst till rörelse tilläts inte',
-    err: 'Visningens filer kunde inte laddas.', goTo: 'Gå till', floor: 'Våning', wholeHouse: 'Hela huset',
+    err: 'Visningens filer kunde inte laddas.', start: 'Start', goTo: 'Gå till', floor: 'Våning', wholeHouse: 'Hela huset',
     mapHint: 'Klicka på ett rum för att gå dit · dra för att vrida huset', mapHintTouch: 'Tryck på ett rum för att gå dit',
     quality: 'Kvalitet', qAuto: 'Auto', qHigh: 'Hög', qLight: 'Lätt', mb: 'MB',
   },
@@ -190,7 +190,11 @@ async function main() {
   if (tour.map && tour.map.rooms?.length) {
     const pick = (id, from) => {
       if (!id) { if (from === 'small') pause(); return; }
-      if (goToRoom) goToRoom(id); else { pendingRoom = id; mapLarge.current = id; }
+      if (goToRoom) goToRoom(id);
+      else {  // still loading: remember the choice and show it as where you'll start
+        pendingRoom = id; mapLarge.current = id;
+        document.querySelectorAll('.room-chip').forEach((b) => b.classList.toggle('chosen', b.dataset.room === id));
+      }
     };
     mapLarge = new TourMap($('mapLarge'), tour.map, { onPick: pick });
     mapLarge.mode = 'large';
@@ -216,7 +220,7 @@ async function main() {
     const groups = levels.map((_, li) => rooms.filter((r) => r.level === li));
     $('roomList').innerHTML = groups.map((g, li) => !g.length ? '' :
       `<div class="room-group">${levels.length > 1 ? `<span class="room-floor">${T.floor} ${li + 1}</span>` : ''}${g.map((r) =>
-        `<button class="room-chip" data-room="${r.id}">${(r.name || '').replace(/</g, '&lt;')}</button>`).join('')}</div>`).join('');
+        `<button class="room-chip${r.id === tour.map.startRoom ? ' start' : ''}" data-room="${r.id}">${(r.name || '').replace(/</g, '&lt;')}${r.id === tour.map.startRoom ? `<em>${T.start}</em>` : ''}</button>`).join('')}</div>`).join('');
     $('roomsTitle').textContent = T.goTo;
     $('rooms').classList.remove('hidden');
     $('roomList').addEventListener('click', (e) => { const b = e.target.closest('[data-room]'); if (b) pick(b.dataset.room, 'large'); });
@@ -366,10 +370,16 @@ async function main() {
     body.setTranslation({ x, y: y + CENTER + 0.02, z }, true);
     body.setNextKinematicTranslation({ x, y: y + CENTER + 0.02, z });
   };
-  const startRoom = mapLarge && (mapLarge.room(tour.map.startRoom) ? tour.map.startRoom : null);
+  // where the tour starts: the room marked as start in the studio, else the spawn point
+  const startRoom = mapLarge?.room(tour.map?.startRoom) || null;
   const respawn = () => {
-    const [x, y, z] = tour.spawn.position;
-    place(x, y, z, tour.spawn.yaw || 0, tour.spawn.pitch || 0);
+    if (startRoom?.start) {
+      const [x, y, z] = startRoom.start.position;
+      place(x, y, z, startRoom.start.yaw || 0, 0);
+    } else {
+      const [x, y, z] = tour.spawn.position;
+      place(x, y, z, tour.spawn.yaw || 0, tour.spawn.pitch || 0);
+    }
   };
   respawn();
   goToRoom = (id) => {
@@ -384,7 +394,6 @@ async function main() {
     const r = mapLarge?.rooms.find((q) => q.id === pendingRoom || (q.name || '').toLowerCase() === String(pendingRoom).toLowerCase());
     if (r?.start) { const [x, y, z] = r.start.position; place(x, y, z, r.start.yaw || 0); }
   }
-  void startRoom;
 
   // ---- debug collision overlay (edit mode, key G)
   let overlay = null;
