@@ -11,7 +11,7 @@
 //   ?lang=sv|en      force UI language
 
 import { TourMap } from './map.js';
-import { buildKeypad, buildStick } from './controls.js';
+import { buildKeypad, buildStick, howToHTML, PHONE_FLIP } from './controls.js';
 import { Gyro, yawPitchOf } from './gyro.js';
 
 // Start downloading the engine and physics right away, in parallel with the tour itself.
@@ -32,6 +32,7 @@ const STRINGS = {
     move: 'Move', look: 'Look around', run: 'Walk faster', reset: 'Back to start', exit: 'Pause', map: 'Map',
     drag: 'Drag', stick: 'Joystick', hint: 'WASD to walk · mouse to look · Esc to pause',
     hintTouch: 'Joystick to walk · drag to look', mouse: 'Mouse',
+    lookShort: 'Look', tilt: 'Tilt phone',
     gyro: 'Look around by moving your phone', gyroOn: 'Move your phone to look around', gyroOff: 'Drag to look around',
     gyroNone: "This phone doesn't report how it's turned", gyroDenied: 'Motion access was not allowed',
     err: 'The tour files could not be loaded.', goTo: 'Go to', floor: 'Floor', wholeHouse: 'Whole house',
@@ -43,6 +44,7 @@ const STRINGS = {
     move: 'Gå', look: 'Se dig omkring', run: 'Gå snabbare', reset: 'Till början', exit: 'Paus', map: 'Karta',
     drag: 'Dra', stick: 'Styrspak', hint: 'WASD för att gå · musen för att titta · Esc för paus',
     hintTouch: 'Styrspak för att gå · dra för att titta', mouse: 'Mus',
+    lookShort: 'Titta', tilt: 'Vrid mobilen',
     gyro: 'Titta runt genom att röra telefonen', gyroOn: 'Rör telefonen för att se dig omkring', gyroOff: 'Dra för att se dig omkring',
     gyroNone: 'Telefonen rapporterar inte hur den vrids', gyroDenied: 'Åtkomst till rörelse tilläts inte',
     err: 'Visningens filer kunde inte laddas.', goTo: 'Gå till', floor: 'Våning', wholeHouse: 'Hela huset',
@@ -179,14 +181,7 @@ async function main() {
   $('eyebrow').textContent = tour.eyebrow || '';
   $('subtitle').textContent = tour.subtitle || '';
   $('enterLabel').textContent = T.loading;
-  $('keys').innerHTML = touch
-    ? `<span>${T.stick}</span><span>${T.move}</span><span>${T.drag}</span><span>${T.look}</span>`
-    : `<span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span>${T.move}</span>
-       <span><kbd>${T.mouse}</kbd></span><span>${T.look}</span>
-       <span><kbd>Shift</kbd></span><span>${T.run}</span>
-       <span><kbd>R</kbd></span><span>${T.reset}</span>
-       ${tour.map ? `<span><kbd>M</kbd></span><span>${T.map}</span>` : ''}
-       <span><kbd>Esc</kbd></span><span>${T.exit}</span>`;
+  $('keys').innerHTML = howToHTML({ touch, gyro: touch && Gyro.supported, T });
   const resolve = (f) => new URL(f, tourUrl).href;
 
   // ---- floor map (drawn while everything else loads)
@@ -445,7 +440,7 @@ async function main() {
 
   // touch: joystick on the left, drag anywhere else to look
   const stickEl = $('stick'), knob = $('knob');
-  buildStick(stickEl);
+  buildStick(stickEl, 112);
   buildKeypad($('keypad'));
   let stickId = null, lookId = null, lx = 0, ly = 0;
   const stickMove = (t) => {
@@ -454,7 +449,7 @@ async function main() {
     let y = (t.clientY - (r.top + r.height / 2)) / (r.height / 2);
     const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m; }
     stick.x = x; stick.y = y;
-    knob.style.transform = `translate(${x * 24}px, ${y * 24}px)`;
+    knob.style.transform = `translate(${x * 20}px, ${y * 20}px)`;
   };
   stickEl.addEventListener('touchstart', (e) => { e.preventDefault(); stickId = e.changedTouches[0].identifier; stickMove(e.changedTouches[0]); }, { passive: false });
   canvas.addEventListener('touchstart', (e) => { const t = e.changedTouches[0]; lookId = t.identifier; lx = t.clientX; ly = t.clientY; }, { passive: true });
@@ -516,6 +511,7 @@ async function main() {
   const flash = (msg) => { hint.textContent = msg; hint.style.opacity = 1; setTimeout(() => { hint.style.opacity = 0; }, 2500); };
   if (touch && Gyro.supported) {
     const btn = $('gyroBtn');
+    btn.innerHTML = PHONE_FLIP;
     btn.classList.remove('hidden');
     btn.title = T.gyro; btn.setAttribute('aria-label', T.gyro);
     btn.addEventListener('click', async () => {
