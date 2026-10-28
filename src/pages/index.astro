@@ -20,6 +20,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 <link rel="modulepreload" href="lib/rapier.mjs">
 <link rel="modulepreload" href="map.js">
 <link rel="modulepreload" href="controls.js">
+<link rel="modulepreload" href="gyro.js">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -60,6 +61,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
   <div class="hint" id="hint"></div>
   <div class="dev hidden" id="dev"></div>
   <div class="keypad hidden" id="keypad" aria-hidden="true"></div>
+  <button class="gyro-btn hidden" id="gyroBtn" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="4" width="8" height="16" rx="2"/><path d="M11 17h2"/><path d="M4.5 9a8 8 0 0 0 0 6M2 7.5a11 11 0 0 0 0 9M19.5 9a8 8 0 0 1 0 6M22 7.5a11 11 0 0 1 0 9"/></svg></button>
   <div class="mini-wrap hidden" id="miniWrap">
     <canvas id="mapSmall" class="mini"></canvas>
     <select id="miniFloor" class="floor-select mini-floor hidden" aria-label="Floor"></select>

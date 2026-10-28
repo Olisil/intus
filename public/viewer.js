@@ -12,6 +12,7 @@
 
 import { TourMap } from './map.js';
 import { buildKeypad, buildStick } from './controls.js';
+import { Gyro, yawPitchOf } from './gyro.js';
 
 // Start downloading the engine and physics right away, in parallel with the tour itself.
 const libs = Promise.all([import('./lib/playcanvas.mjs'), import('./lib/rapier.mjs')]);
@@ -31,6 +32,8 @@ const STRINGS = {
     move: 'Move', look: 'Look around', run: 'Walk faster', reset: 'Back to start', exit: 'Pause', map: 'Map',
     drag: 'Drag', stick: 'Joystick', hint: 'WASD to walk · mouse to look · Esc to pause',
     hintTouch: 'Joystick to walk · drag to look', mouse: 'Mouse',
+    gyro: 'Look around by moving your phone', gyroOn: 'Move your phone to look around', gyroOff: 'Drag to look around',
+    gyroNone: "This phone doesn't report how it's turned", gyroDenied: 'Motion access was not allowed',
     err: 'The tour files could not be loaded.', goTo: 'Go to', floor: 'Floor', wholeHouse: 'Whole house',
     mapHint: 'Click a room to go there · drag to turn the house', mapHintTouch: 'Tap a room to go there',
     quality: 'Quality', qAuto: 'Auto', qHigh: 'High', qLight: 'Light', mb: 'MB',
@@ -40,6 +43,8 @@ const STRINGS = {
     move: 'Gå', look: 'Se dig omkring', run: 'Gå snabbare', reset: 'Till början', exit: 'Paus', map: 'Karta',
     drag: 'Dra', stick: 'Styrspak', hint: 'WASD för att gå · musen för att titta · Esc för paus',
     hintTouch: 'Styrspak för att gå · dra för att titta', mouse: 'Mus',
+    gyro: 'Titta runt genom att röra telefonen', gyroOn: 'Rör telefonen för att se dig omkring', gyroOff: 'Dra för att se dig omkring',
+    gyroNone: 'Telefonen rapporterar inte hur den vrids', gyroDenied: 'Åtkomst till rörelse tilläts inte',
     err: 'Visningens filer kunde inte laddas.', goTo: 'Gå till', floor: 'Våning', wholeHouse: 'Hela huset',
     mapHint: 'Klicka på ett rum för att gå dit · dra för att vrida huset', mapHintTouch: 'Tryck på ett rum för att gå dit',
     quality: 'Kvalitet', qAuto: 'Auto', qHigh: 'Hög', qLight: 'Lätt', mb: 'MB',
@@ -358,7 +363,9 @@ async function main() {
 
   const feet = new pc.Vec3(), prevFeet = new pc.Vec3(), drawFeet = new pc.Vec3();
   let yaw = 0, pitch = 0, vy = 0, fly = false, smoothEye = null;
+  const gyro = new Gyro();
   const place = (x, y, z, yw = yaw, pt = 0) => {
+    if (gyro.on) gyro.setYaw(yw);
     feet.set(x, y + 0.02, z); prevFeet.copy(feet);
     yaw = yw; pitch = pt; vy = 0; smoothEye = null;
     body.setTranslation({ x, y: y + CENTER + 0.02, z }, true);
@@ -454,7 +461,10 @@ async function main() {
   addEventListener('touchmove', (e) => {
     for (const t of e.changedTouches) {
       if (t.identifier === stickId) stickMove(t);
-      else if (t.identifier === lookId) { look(t.clientX - lx, t.clientY - ly, 0.25); lx = t.clientX; ly = t.clientY; }
+      else if (t.identifier === lookId) {
+        if (gyro.on) gyro.turn(-(t.clientX - lx) * 0.25); else look(t.clientX - lx, t.clientY - ly, 0.25);
+        lx = t.clientX; ly = t.clientY;
+      }
     }
   }, { passive: true });
   addEventListener('touchend', (e) => {
@@ -504,6 +514,18 @@ async function main() {
   hint.textContent = touch ? T.hintTouch : T.hint;
   setTimeout(() => { hint.style.opacity = 0; }, 7000);
   const flash = (msg) => { hint.textContent = msg; hint.style.opacity = 1; setTimeout(() => { hint.style.opacity = 0; }, 2500); };
+  if (touch && Gyro.supported) {
+    const btn = $('gyroBtn');
+    btn.classList.remove('hidden');
+    btn.title = T.gyro; btn.setAttribute('aria-label', T.gyro);
+    btn.addEventListener('click', async () => {
+      if (gyro.on) { gyro.disable(); pitch = 0; btn.classList.remove('on'); btn.setAttribute('aria-pressed', 'false'); flash(T.gyroOff); return; }
+      try {
+        await gyro.enable(yaw);
+        btn.classList.add('on'); btn.setAttribute('aria-pressed', 'true'); flash(T.gyroOn);
+      } catch (e) { flash(e.message === 'denied' ? T.gyroDenied : T.gyroNone); }
+    });
+  }
   if (EDIT) $('dev').classList.remove('hidden');
 
   // ---- rooms: which one are we in?
@@ -603,7 +625,11 @@ async function main() {
     const eyeY = drawFeet.y + tour.eyeHeight;
     smoothEye = smoothEye === null || fly ? eyeY : pc.math.lerp(smoothEye, eyeY, 1 - Math.exp(-dt * 14));
     camera.setPosition(drawFeet.x, smoothEye, drawFeet.z);
-    camera.setEulerAngles(pitch, yaw, 0);
+    const gq = gyro.frame(dt);
+    if (gq) {
+      camera.setRotation(new pc.Quat(gq[0], gq[1], gq[2], gq[3]));
+      ({ yaw, pitch } = yawPitchOf(gq));
+    } else camera.setEulerAngles(pitch, yaw, 0);
     showDirections();
     if ((roomT += dt) > 0.1) { roomT = 0; updateRoom(); }
     if (EDIT) {

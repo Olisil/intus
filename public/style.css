@@ -117,3 +117,10 @@ body:not(.ready) .room-chip { opacity: .55; }
 #knob { z-index: 1; }
 @media (max-width: 760px) { .hint { bottom: auto; top: 64px; max-width: calc(100vw - 32px); white-space: normal; text-align: center; } }
 @media (max-width: 760px), (max-height: 520px) { .keypad { display: none; } }
+
+/* ---- look around by moving the phone ---- */
+.gyro-btn { position: absolute; top: 12px; right: 12px; width: 44px; height: 44px; border-radius: 50%; pointer-events: auto;
+  display: grid; place-items: center; color: var(--ink); background: var(--glass); border: 1px solid var(--line);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); transition: background .15s, color .15s; }
+.gyro-btn svg { width: 22px; height: 22px; }
+.gyro-btn.on { background: var(--accent); color: #141414; border-color: var(--accent); }
