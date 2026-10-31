@@ -1,0 +1,15 @@
+{
+  // intus stats: collects anonymous tour visits and serves the hidden stats page's data.
+  // Deployed by Cloudflare Workers Builds from this folder (root directory: stats-worker).
+  "name": "intus-stats",
+  "main": "src/index.js",
+  "compatibility_date": "2025-10-01",
+  // The database is created automatically on the first deploy (Wrangler 4.45+).
+  "d1_databases": [{ "binding": "DB", "database_name": "intus-stats" }],
+  "vars": {
+    // Sites allowed to send visits and to read stats (comma separated)
+    "ALLOWED_ORIGINS": "https://nassauweb.webflow.io,https://nassau.se,https://www.nassau.se"
+  },
+  // SETUP_CODE is a secret set in the Cloudflare dashboard; it is only used to create the first admin account.
+  "observability": { "enabled": true }
+}

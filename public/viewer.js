@@ -13,6 +13,8 @@
 import { TourMap } from './map.js';
 import { buildKeypad, buildStick, howToHTML, PHONE_FLIP } from './controls.js';
 import { Gyro, yawPitchOf } from './gyro.js';
+import { VisitRecorder, statsEnabled } from './stats.js';
+import { statsUrl, getToken, loadSessions, aggregate, buildHeat3D } from './heat.js';
 
 // Start downloading the engine and physics right away, in parallel with the tour itself.
 const libs = Promise.all([import('./lib/playcanvas.mjs'), import('./lib/rapier.mjs')]);
@@ -33,6 +35,8 @@ const STRINGS = {
     drag: 'Drag', stick: 'Joystick', hint: 'WASD to walk · mouse to look · Esc to pause',
     hintTouch: 'Joystick to walk · drag to look', mouse: 'Mouse',
     lookShort: 'Look', tilt: 'Tilt phone',
+    heat: 'Heat map', heatLogin: 'Sign in on the statistics page to see it.', heatOpenStats: 'Statistics', heatVisits: 'visits',
+    heatWalk: 'Walked', heatLook: 'Looked at', heatAll: 'All',
     gyro: 'Look around by moving your phone', gyroOn: 'Move your phone to look around', gyroOff: 'Drag to look around',
     gyroNone: "This phone doesn't report how it's turned", gyroDenied: 'Motion access was not allowed',
     err: 'The tour files could not be loaded.', start: 'Start', goTo: 'Go to', floor: 'Floor', wholeHouse: 'Whole house',
@@ -45,6 +49,8 @@ const STRINGS = {
     drag: 'Dra', stick: 'Styrspak', hint: 'WASD för att gå · musen för att titta · Esc för paus',
     hintTouch: 'Styrspak för att gå · dra för att titta', mouse: 'Mus',
     lookShort: 'Titta', tilt: 'Vrid mobilen',
+    heat: 'Värmekarta', heatLogin: 'Logga in på statistiksidan för att se den.', heatOpenStats: 'Statistik', heatVisits: 'besök',
+    heatWalk: 'Gick', heatLook: 'Tittade på', heatAll: 'Allt',
     gyro: 'Titta runt genom att röra telefonen', gyroOn: 'Rör telefonen för att se dig omkring', gyroOff: 'Dra för att se dig omkring',
     gyroNone: 'Telefonen rapporterar inte hur den vrids', gyroDenied: 'Åtkomst till rörelse tilläts inte',
     err: 'Visningens filer kunde inte laddas.', start: 'Start', goTo: 'Gå till', floor: 'Våning', wholeHouse: 'Hela huset',
@@ -76,7 +82,7 @@ async function resolveTourUrl() {
     const url = new URL(`${id}/tour.json`, base).href;
     try {
       const r = await fetch(url, { cache: 'no-cache' });
-      if (r.ok) return { url, json: await r.json() };
+      if (r.ok) return { url, json: await r.json(), id: decodeURIComponent(id) };
     } catch { /* next */ }
   }
   throw new Error(`tour "${decodeURIComponent(id)}" not found`);
@@ -171,7 +177,7 @@ function parseGlbTriangles(buf) {
 
 // ---------------------------------------------------------------- main
 async function main() {
-  const { url: tourUrl, json } = await resolveTourUrl();
+  const { url: tourUrl, json, id: tourId } = await resolveTourUrl();
   const tour = { ...DEFAULTS, ...json };
   const lang = qs.get('lang') || tour.lang || (navigator.language || 'en').slice(0, 2);
   T = STRINGS[lang] || STRINGS.en;
@@ -244,6 +250,10 @@ async function main() {
 
   // ---- quality
   let quality = chooseQuality(tour);
+  // anonymous visit statistics (where people walk and look), if the page names a stats service
+  const STATS_URL = document.querySelector('meta[name="intus-stats"]')?.content || '';
+  const recorder = statsEnabled(STATS_URL) && tourId && /^[a-z0-9][a-z0-9-]{0,59}$/.test(tourId)
+    ? new VisitRecorder({ url: STATS_URL, tour: tourId, device: touch ? 'touch' : 'desktop', lang: document.documentElement.lang }) : null;
   if (tour.splatLite) {
     $('quality').classList.remove('hidden');
     $('qualityLabel').textContent = T.quality;
@@ -360,6 +370,14 @@ async function main() {
   kcc.setMinSlopeSlideAngle((65 * Math.PI) / 180);
   kcc.setSlideEnabled(true);
 
+  // what the visitor is looking at: first wall/floor along the view (for the look heat map)
+  const castView = (o, d) => {
+    const hit = world.castRayAndGetNormal(new RAPIER.Ray({ x: o[0], y: o[1], z: o[2] }, { x: d[0], y: d[1], z: d[2] }), 25, true,
+      undefined, undefined, collider);
+    if (!hit) return null;
+    const t = hit.timeOfImpact;
+    return { p: [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t], n: [hit.normal.x, hit.normal.y, hit.normal.z] };
+  };
   const feet = new pc.Vec3(), prevFeet = new pc.Vec3(), drawFeet = new pc.Vec3();
   let yaw = 0, pitch = 0, vy = 0, fly = false, smoothEye = null;
   const gyro = new Gyro();
@@ -527,6 +545,7 @@ async function main() {
       if (gyro.on) { gyro.disable(); pitch = 0; btn.classList.remove('on'); btn.setAttribute('aria-pressed', 'false'); flash(T.gyroOff); return; }
       try {
         await gyro.enable(yaw);
+        if (recorder) recorder.gyro = true;
         btn.classList.add('on'); btn.setAttribute('aria-pressed', 'true'); flash(T.gyroOn);
       } catch (e) { flash(e.message === 'denied' ? T.gyroDenied : T.gyroNone); }
     });
@@ -637,6 +656,14 @@ async function main() {
     } else camera.setEulerAngles(pitch, yaw, 0);
     showDirections();
     if ((roomT += dt) > 0.1) { roomT = 0; updateRoom(); }
+    if (recorder && active && document.visibilityState === 'visible') {
+      recorder.quality = quality;
+      const fw = camera.forward;
+      recorder.tick({
+        dt, feet: [drawFeet.x, drawFeet.y, drawFeet.z], level: mapLarge ? mapLarge.levelAt(drawFeet.y) : 0, room: currentRoom,
+        eye: [drawFeet.x, smoothEye, drawFeet.z], dir: [fw.x, fw.y, fw.z], cast: castView,
+      });
+    }
     if (EDIT) {
       $('dev').textContent =
         `pos  ${feet.x.toFixed(2)} ${feet.y.toFixed(2)} ${feet.z.toFixed(2)}\nyaw  ${yaw.toFixed(0)}°   ${fly ? 'FLY' : 'walk'}\n` +
@@ -645,6 +672,34 @@ async function main() {
     }
     void tmp;
   });
+
+  // ---- heat mode (?heat): where visitors walked and what they looked at, as layers in 3D
+  if (qs.has('heat')) {
+    const panel = document.createElement('div');
+    panel.className = 'heat-panel';
+    document.body.appendChild(panel);
+    const days = Number(qs.get('days') ?? 30);
+    const statsPage = new URL('stats', document.baseURI).href;
+    if (!statsUrl() || !getToken()) {
+      panel.innerHTML = `<b>${T.heat}</b><span>${T.heatLogin}</span><a href="${statsPage}">${T.heatOpenStats}</a>`;
+    } else {
+      panel.innerHTML = `<b>${T.heat}</b><span>${T.loading}…</span>`;
+      try {
+        const A = aggregate(await loadSessions(tourId, days ? Date.now() - days * 864e5 : 0));
+        const H = buildHeat3D({ pc, app, camera, tris, levels: tour.map?.levels, A, cast: castView });
+        const opt = (d, l) => `<option value="${d}" ${d === days ? 'selected' : ''}>${l}</option>`;
+        panel.innerHTML = `<b>${T.heat}</b><span>${A.visits} ${T.heatVisits}</span>
+          <label><input type="checkbox" data-l="walk" ${H.walk ? 'checked' : 'disabled'}><i class="sw walk"></i>${T.heatWalk}</label>
+          <label><input type="checkbox" data-l="look" ${H.look ? 'checked' : 'disabled'}><i class="sw look"></i>${T.heatLook}</label>
+          <select>${opt(7, '7 d')}${opt(30, '30 d')}${opt(90, '90 d')}${opt(0, T.heatAll)}</select>
+          <a href="${statsPage}?t=${encodeURIComponent(tourId)}">${T.heatOpenStats}</a>`;
+        panel.querySelectorAll('input[data-l]').forEach((c) => c.addEventListener('change', () => { const e = H[c.dataset.l]; if (e) e.enabled = c.checked; }));
+        panel.querySelector('select').addEventListener('change', (e) => { const u = new URL(location.href); u.searchParams.set('days', e.target.value); location.href = u.href; });
+      } catch (e) {
+        panel.innerHTML = `<b>${T.heat}</b><span>${e.status === 401 ? T.heatLogin : e.message}</span><a href="${statsPage}">${T.heatOpenStats}</a>`;
+      }
+    }
+  }
 
   // small scripting hook (used by tests and for embedding)
   window.__tour = {
