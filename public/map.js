@@ -108,7 +108,7 @@ export class TourMap {
     this.hover = null;
     this.current = null;
     this.feet = null; this.yaw = 0;
-    this.spin = 0; this.drag = null; this.userTurn = 0; this.lastInteract = 0;
+    this.drag = null; this.userTurn = 0; this.lastInteract = 0;
     this.accent = '#e8dcc7';
     this.setMap(map);
     this._bind();
@@ -127,6 +127,7 @@ export class TourMap {
       return { ...r, loops, y0: level.y, y1: top, label: [(big[0] + big[2]) / 2, (big[1] + big[3]) / 2] };
     });
     this.ext = this._extent(null);
+    this._ver = (this._ver || 0) + 1;
   }
 
   _extent(level) {
@@ -171,54 +172,59 @@ export class TourMap {
   }
 
   // ------------------------------------------------------------ view
+  // A perspective view of the house from above and to the side. It stands still (square-on to the
+  // walls, turned a little so it reads as 3D) until you drag it round, and its scale is worked out
+  // for every turn at once, so it never grows or shrinks while it turns.
   _view(w, h, shown) {
     const large = this.mode === 'large';
     const a = this.map.angle || 0;
-    let phi, elev;
-    if (large) {
-      // square-on to the walls, turned a little so it reads as 3D; drifts slowly until you touch it
-      phi = -a + 0.5 + Math.sin(this.spin * 0.25) * 0.35 + this.userTurn;
-      elev = 0.5;
-    } else {
-      // heading-up: the way you look always points up on the map
-      phi = (this.yaw * Math.PI) / 180;
-      elev = 0.9;
-    }
+    const phi = -a + 0.5 + this.userTurn;
+    const elev = large ? 0.55 : 0.8;
     const gap = large && shown.length > 1 ? 3.2 : 0;   // extra space between storeys (exploded view)
     const [u0, v0, u1, v1] = shown.length === 1 ? this._extent(shown[0]) : this.ext;
     const [cx, cz] = fromPlan(a, (u0 + u1) / 2, (v0 + v1) / 2);
     const off = (li) => (gap ? li * gap : 0);
     const ys = shown.map((i) => this.levels[i].y + off(i));
     const yMid = (Math.min(...ys) + Math.max(...ys) + (this.levels[shown.at(-1)]?.height || 2.5)) / 2;
-    const cp = Math.cos(phi), sp = Math.sin(phi), se = Math.sin(elev), ce = Math.cos(elev);
-    const proj = (x, y, z, li = 0) => {
-      const dx = x - cx, dz = z - cz, dy = y + off(li) - yMid;
+    const se = Math.sin(elev), ce = Math.cos(elev);
+    // corners of the shown storeys, relative to the centre
+    const pts = [];
+    for (const li of shown) {
+      const l = this.levels[li];
+      for (const [u, v] of [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]) {
+        const [x, z] = fromPlan(a, u, v);
+        for (const y of [l.y, l.y + l.height]) pts.push([x - cx, y + off(li) - yMid, z - cz]);
+      }
+    }
+    const radius = Math.max(1, ...pts.map(([x, y, z]) => Math.hypot(x, y, z)));
+    const D = radius * 2.6;   // camera distance: a normal, gentle perspective
+    const projAt = (cp, sp, dx, dy, dz) => {
       const rx = dx * cp - dz * sp, rz = dx * sp + dz * cp;
-      return [rx, rz * se - dy * ce];
+      const depth = D - (rz * ce + dy * se);
+      const k = D / Math.max(depth, D * 0.25);
+      return [rx * k, (rz * se - dy * ce) * k];
     };
-    let x0, y0, x1, y1;
-    if (large) {
-      x0 = y0 = Infinity; x1 = y1 = -Infinity;
-      for (const li of shown) {
-        const l = this.levels[li];
-        for (const [u, v] of [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]) {
-          const [x, z] = fromPlan(a, u, v);
-          for (const y of [l.y, l.y + l.height]) {
-            const [px, py] = proj(x, y, z, li);
-            x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
-          }
+    const key = `${shown.join()}|${this.mode}|${w}|${h}|${this._ver}`;
+    if (this._fitKey !== key) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let i = 0; i < 48; i++) {
+        const t = (i / 48) * Math.PI * 2, cp = Math.cos(t), sp = Math.sin(t);
+        for (const [x, y, z] of pts) {
+          const [px, py] = projAt(cp, sp, x, y, z);
+          x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
         }
       }
-    } else {
-      // fit a circle round the storey, so the scale stays put while the map turns with you
-      const r = Math.hypot(u1 - u0, v1 - v0) / 2 + 0.3;
-      const hh = (this.levels[shown[0]]?.height || 2.5) * ce / 2;
-      x0 = -r; x1 = r; y0 = -r * se - hh; y1 = r * se + hh;
+      const pad = large ? 0.08 : 0.05;
+      const s = Math.min(w * (1 - 2 * pad) / (x1 - x0 || 1), h * (1 - 2 * pad) / (y1 - y0 || 1));
+      this._fit = { s, ox: w / 2 - s * (x0 + x1) / 2, oy: h / 2 - s * (y0 + y1) / 2 };
+      this._fitKey = key;
     }
-    const pad = large ? 0.1 : 0.06;
-    const s = Math.min(w * (1 - 2 * pad) / (x1 - x0 || 1), h * (1 - 2 * pad) / (y1 - y0 || 1));
-    const ox = w / 2 - s * (x0 + x1) / 2, oy = h / 2 - s * (y0 + y1) / 2;
-    return { a, s, P: (x, y, z, li) => { const [px, py] = proj(x, y, z, li); return [ox + s * px, oy + s * py]; } };
+    const { s, ox, oy } = this._fit;
+    const cp = Math.cos(phi), sp = Math.sin(phi);
+    return {
+      a, s,
+      P: (x, y, z, li = 0) => { const [px, py] = projAt(cp, sp, x - cx, y + off(li) - yMid, z - cz); return [ox + s * px, oy + s * py]; },
+    };
   }
 
   // ------------------------------------------------------------ drawing
@@ -230,7 +236,6 @@ export class TourMap {
       c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
     }
     const large = this.mode === 'large';
-    if (large && performance.now() - this.lastInteract > 2500 && !this.drag) this.spin += dt;
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
@@ -347,19 +352,19 @@ export class TourMap {
     const pos = (e) => { const r = c.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
     c.addEventListener('pointermove', (e) => {
       this.lastInteract = performance.now();
-      if (this.drag && this.mode === 'large') {
+      if (this.drag) {
         const dx = e.clientX - this.drag.x;
         if (Math.abs(dx) > 3) this.drag.moved = true;
-        this.userTurn = this.drag.turn - dx * 0.006;   // the house turns with the pointer
-        return;
+        if (this.drag.moved) { this.userTurn = this.drag.turn - dx * 0.006; return; }   // the house turns with the pointer
       }
       const id = this.pick(...pos(e));
-      if (id !== this.hover) { this.hover = id; c.style.cursor = id ? 'pointer' : this.mode === 'large' ? 'grab' : 'pointer'; }
+      if (id !== this.hover) { this.hover = id; c.style.cursor = id ? 'pointer' : 'grab'; }
     });
     c.addEventListener('pointerleave', () => { this.hover = null; });
+    c.addEventListener('pointercancel', () => { this.drag = null; });
     c.addEventListener('pointerdown', (e) => {
       this.drag = { x: e.clientX, turn: this.userTurn, moved: false };
-      if (this.mode === 'large') c.setPointerCapture?.(e.pointerId);
+      c.setPointerCapture?.(e.pointerId);
     });
     c.addEventListener('pointerup', (e) => {
       const d = this.drag; this.drag = null;

@@ -15,6 +15,7 @@ import { buildKeypad, buildStick, howToHTML, PHONE_FLIP } from './controls.js';
 import { Gyro, yawPitchOf } from './gyro.js';
 import { VisitRecorder, statsEnabled } from './stats.js';
 import { statsUrl, getToken, loadSessions, aggregate, buildHeat3D } from './heat.js';
+import { Measure } from './measure.js';
 
 // Start downloading the engine and physics right away, in parallel with the tour itself.
 const libs = Promise.all([import('./lib/playcanvas.mjs'), import('./lib/rapier.mjs')]);
@@ -32,7 +33,7 @@ const STRINGS = {
   en: {
     loading: 'Loading', enter: 'Step inside', resume: 'Continue', tapEnter: 'Tap to step inside',
     move: 'Move', look: 'Look around', run: 'Walk faster', reset: 'Back to start', exit: 'Pause', map: 'Map',
-    drag: 'Drag', stick: 'Joystick', hint: 'WASD to walk · mouse to look · Esc to pause',
+    drag: 'Drag', stick: 'Joystick', hint: 'WASD to walk · mouse to look · Space to measure · Esc to pause',
     hintTouch: 'Joystick to walk · drag to look', mouse: 'Mouse',
     lookShort: 'Look', tilt: 'Tilt phone',
     heat: 'Heat map', heatLogin: 'Sign in on the statistics page to see it.', heatOpenStats: 'Statistics', heatVisits: 'visits',
@@ -42,11 +43,14 @@ const STRINGS = {
     err: 'The tour files could not be loaded.', start: 'Start', goTo: 'Go to', floor: 'Floor', wholeHouse: 'Whole house',
     mapHint: 'Click a room to go there · drag to turn the house', mapHintTouch: 'Tap a room to go there',
     quality: 'Quality', qAuto: 'Auto', qHigh: 'High', qLight: 'Light', mb: 'MB',
+    measure: 'Measure', measureKey: 'Measure distances (Space)', measureDone: 'Done', measureClear: 'Clear all',
+    measureEmpty: 'No measurements yet', measureTip: 'Click two points. Hold Shift for a straight line.',
+    measureTipTouch: 'Tap two points.', measureFirst: 'Click the first point', measureFirstTouch: 'Tap the first point',
   },
   sv: {
     loading: 'Laddar', enter: 'Kliv in', resume: 'Fortsätt', tapEnter: 'Tryck för att kliva in',
     move: 'Gå', look: 'Se dig omkring', run: 'Gå snabbare', reset: 'Till början', exit: 'Paus', map: 'Karta',
-    drag: 'Dra', stick: 'Styrspak', hint: 'WASD för att gå · musen för att titta · Esc för paus',
+    drag: 'Dra', stick: 'Styrspak', hint: 'WASD för att gå · musen för att titta · mellanslag för att mäta · Esc för paus',
     hintTouch: 'Styrspak för att gå · dra för att titta', mouse: 'Mus',
     lookShort: 'Titta', tilt: 'Vrid mobilen',
     heat: 'Värmekarta', heatLogin: 'Logga in på statistiksidan för att se den.', heatOpenStats: 'Statistik', heatVisits: 'besök',
@@ -56,6 +60,9 @@ const STRINGS = {
     err: 'Visningens filer kunde inte laddas.', start: 'Start', goTo: 'Gå till', floor: 'Våning', wholeHouse: 'Hela huset',
     mapHint: 'Klicka på ett rum för att gå dit · dra för att vrida huset', mapHintTouch: 'Tryck på ett rum för att gå dit',
     quality: 'Kvalitet', qAuto: 'Auto', qHigh: 'Hög', qLight: 'Lätt', mb: 'MB',
+    measure: 'Mät', measureKey: 'Mät avstånd (mellanslag)', measureDone: 'Klar', measureClear: 'Rensa alla',
+    measureEmpty: 'Inga mätningar än', measureTip: 'Klicka på två punkter. Håll Shift för rak linje.',
+    measureTipTouch: 'Tryck på två punkter.', measureFirst: 'Klicka på första punkten', measureFirstTouch: 'Tryck på första punkten',
   },
 };
 let T = STRINGS.en;
@@ -95,7 +102,7 @@ const DEFAULTS = {
   eyeHeight: 1.6, walkSpeed: 1.4, runSpeed: 2.8,
   fov: 75, background: '#0d0d0e',
   stepHeight: 0.28, playerRadius: 0.22,
-  bounds: null, path: null, map: null,
+  bounds: null, path: null, map: null, measureScale: 1,
 };
 
 // ---------------------------------------------------------------- device + quality
@@ -437,8 +444,15 @@ async function main() {
   const keys = new Set();
   const stick = { x: 0, y: 0 };
   let active = false;
+  let measure = null;
   addEventListener('keydown', (e) => {
     if (!active) return;
+    if (measure && e.code === 'Space' && !(EDIT && fly)) { e.preventDefault(); if (!e.repeat) toggleMeasure(); return; }
+    if (measure?.on) {
+      if (e.code === 'Escape') { if (!measure.cancel()) toggleMeasure(); }
+      if (e.code === 'Backspace' || e.code === 'Delete') measure.undo();
+      return;
+    }
     keys.add(e.code);
     if (e.code === 'KeyR') respawn();
     if (e.code === 'KeyM' && mapSmall) {
@@ -462,7 +476,8 @@ async function main() {
     pitch = Math.max(-85, Math.min(85, pitch - dy * k));
   };
   document.addEventListener('mousemove', (e) => {
-    if (document.pointerLockElement === canvas) look(e.movementX, e.movementY, 0.12);
+    // (Chrome sometimes reports a huge jump when the lock starts or ends - ignore those)
+    if (document.pointerLockElement === canvas && Math.abs(e.movementX) < 250 && Math.abs(e.movementY) < 250) look(e.movementX, e.movementY, 0.12);
   });
 
   // touch: joystick on the left, drag anywhere else to look
@@ -514,6 +529,8 @@ async function main() {
     else { $('keypad').classList.remove('hidden'); canvas.requestPointerLock?.(); }
   }
   function pause() {
+    if (measure?.on) measure.setOn(false);
+    if (touch && measure) $('measureBtn').blur();
     active = false; keys.clear();
     if (mapLarge && entered) {  // inside the tour: the big map shows the storey you're on
       mapLarge.only = mapLarge.hereLevel;
@@ -526,9 +543,9 @@ async function main() {
     if (document.pointerLockElement) document.exitPointerLock?.();
   }
   enter.addEventListener('click', start);
-  canvas.addEventListener('click', () => { if (active && !touch && document.pointerLockElement !== canvas) canvas.requestPointerLock?.(); });
+  canvas.addEventListener('click', () => { if (active && !touch && !measure?.on && document.pointerLockElement !== canvas) canvas.requestPointerLock?.(); });
   document.addEventListener('pointerlockchange', () => {
-    if (!touch && document.pointerLockElement !== canvas && active && !EDIT) pause();
+    if (!touch && document.pointerLockElement !== canvas && active && !EDIT && !measure?.on) pause();
   });
 
   $('badgeTitle').textContent = tour.title;
@@ -551,6 +568,51 @@ async function main() {
     });
   }
   if (EDIT) $('dev').classList.remove('hidden');
+
+  // ---- measuring: freeze the view, click two points (Space or the ruler button)
+  measure = new Measure({
+    pc, app, camera, splat, cast: castView, T: { ...T, measureTip: touch ? T.measureTipTouch : T.measureTip },
+    lang: document.documentElement.lang, planAngle: tour.map?.angle || 0, scale: tour.measureScale || 1,
+    onToggle: () => toggleMeasure(),
+  });
+  $('tools').classList.remove('hidden');
+  function toggleMeasure() {
+    if (!active) return;
+    const on = !measure.on;
+    keys.clear();
+    measure.setOn(on);
+    if (on) {
+      if (document.pointerLockElement) document.exitPointerLock?.();
+      if (gyro.on) { gyro.disable(); pitch = 0; $('gyroBtn').classList.remove('on'); $('gyroBtn').setAttribute('aria-pressed', 'false'); }
+      stickEl.classList.add('hidden');
+      flash(touch ? T.measureFirstTouch : T.measureFirst);
+    } else {
+      if (touch) stickEl.classList.remove('hidden');
+      else canvas.requestPointerLock?.();
+    }
+  }
+  {
+    // mouse: move = crosshair, click = point, drag = look around; touch: tap = point (drag looks, as always)
+    let down = null;
+    const at = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    canvas.addEventListener('pointerdown', (e) => { if (measure.on) down = { x: e.clientX, y: e.clientY, moved: false, lx: e.clientX, ly: e.clientY }; });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!measure.on) return;
+      if (down) {
+        if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) down.moved = true;
+        if (down.moved && e.pointerType === 'mouse') { look(e.clientX - down.lx, e.clientY - down.ly, 0.18); down.lx = e.clientX; down.ly = e.clientY; }
+        if (down.moved) return;
+      }
+      if (e.pointerType === 'mouse') measure.move(...at(e), e.shiftKey);
+    });
+    canvas.addEventListener('pointerup', (e) => {
+      const d = down; down = null;
+      if (!measure.on || !d || d.moved || e.button !== 0) return;
+      measure.click(...at(e), e.shiftKey);
+    });
+    canvas.addEventListener('pointerleave', () => { if (measure.on && !down) measure.cross.classList.add('hidden'); });
+    canvas.addEventListener('contextmenu', (e) => { if (measure.on) { e.preventDefault(); measure.cancel(); } });
+  }
 
   // ---- rooms: which one are we in?
   let currentRoom = null, toastT = null;
@@ -613,7 +675,7 @@ async function main() {
       forward.set(-Math.sin(yr), 0, -Math.cos(yr));
       right.set(Math.cos(yr), 0, -Math.sin(yr));
       let f = 0, s = 0, u = 0;
-      if (active) {
+      if (active && !measure?.on) {
         if (keys.has('KeyW') || keys.has('ArrowUp')) f += 1;
         if (keys.has('KeyS') || keys.has('ArrowDown')) f -= 1;
         if (keys.has('KeyD') || keys.has('ArrowRight')) s += 1;
@@ -655,6 +717,7 @@ async function main() {
       ({ yaw, pitch } = yawPitchOf(gq));
     } else camera.setEulerAngles(pitch, yaw, 0);
     showDirections();
+    measure?.frame();
     if ((roomT += dt) > 0.1) { roomT = 0; updateRoom(); }
     if (recorder && active && document.visibilityState === 'visible') {
       recorder.quality = quality;
@@ -712,7 +775,7 @@ async function main() {
     setView: (y, p = 0) => { yaw = y; pitch = p; },
     teleport: (x, y, z) => { place(x, y, z, yaw, pitch); },
     setActive: (v) => { active = v; },
-    pause, start,
+    pause, start, get measure() { return measure; }, toggleMeasure: () => toggleMeasure(),
   };
 }
 

@@ -94,9 +94,16 @@ const ESC = `<svg viewBox="0 0 64 64" xmlns="${NS}" fill="none" stroke="currentC
   <rect x="10" y="16" width="44" height="32" rx="9"/><text x="32" y="33" fill="currentColor" stroke="none" text-anchor="middle" dominant-baseline="central"
   font-family="Inter, system-ui, sans-serif" font-weight="500" font-size="15">Esc</text></svg>`;
 
+// space bar with a ruler on it (measure)
+const SPACE = `<svg viewBox="0 0 96 64" xmlns="${NS}" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round">
+  <rect x="6" y="18" width="84" height="28" rx="9"/>
+  <g transform="translate(36 20) scale(1)"><path d="M3.5 15.5 15.5 3.5l5 5-12 12z" stroke-width="1.7"/><path d="M6.5 12.5l2 2M9 10l1.2 1.2M11.5 7.5l2 2M14 5l1.2 1.2" stroke-width="1.5"/></g></svg>`;
+const RULER_BIG = `<svg viewBox="0 0 64 64" xmlns="${NS}" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round">
+  <circle cx="32" cy="32" r="22"/><g transform="translate(18 18) scale(1.15)"><path d="M3.5 15.5 15.5 3.5l5 5-12 12z" stroke-width="1.8"/><path d="M6.5 12.5l2 2M9 10l1.2 1.2M11.5 7.5l2 2M14 5l1.2 1.2" stroke-width="1.6"/></g></svg>`;
+
 export function howToHTML({ touch, gyro, T }) {
   const tile = (art, word, cls = '') => `<div class="how-tile ${cls}"><div class="how-art">${art}</div><span>${word}</span></div>`;
   return touch
-    ? tile(stickSVG(132, true), T.move, 'stick') + tile(SWIPE, T.lookShort) + (gyro ? tile(PHONE_FLIP, T.tilt, 'flip') : '')
-    : tile(keypadSVG({ arrows: false }), T.move, 'wasd') + tile(MOUSE, T.lookShort) + tile(ESC, T.exit);
+    ? tile(stickSVG(132, true), T.move, 'stick') + tile(SWIPE, T.lookShort) + (gyro ? tile(PHONE_FLIP, T.tilt, 'flip') : '') + tile(RULER_BIG, T.measure)
+    : tile(keypadSVG({ arrows: false }), T.move, 'wasd') + tile(MOUSE, T.lookShort) + tile(SPACE, T.measure, 'space') + tile(ESC, T.exit);
 }
