@@ -171,6 +171,12 @@ export class TourMap {
     return this.feet ? this.levelAt(this.feet[1]) : (cur ? cur.level : 0);
   }
 
+  // turn the house so the view direction (yaw in degrees, as in the viewer) points into the screen
+  faceView(yawDeg) {
+    const a = this.map.angle || 0;
+    this.userTurn = (yawDeg * Math.PI) / 180 + a - 0.5;
+  }
+
   // ------------------------------------------------------------ view
   // A perspective view of the house from above and to the side. It stands still (square-on to the
   // walls, turned a little so it reads as 3D) until you drag it round, and its scale is worked out

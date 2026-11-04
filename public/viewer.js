@@ -43,6 +43,7 @@ const STRINGS = {
     err: 'The tour files could not be loaded.', start: 'Start', goTo: 'Go to', floor: 'Floor', wholeHouse: 'Whole house',
     mapHint: 'Click a room to go there · drag to turn the house', mapHintTouch: 'Tap a room to go there',
     quality: 'Quality', qAuto: 'Auto', qHigh: 'High', qLight: 'Light', mb: 'MB',
+    tools: 'Tools', measureKeyShort: 'Space',
     measure: 'Measure', measureKey: 'Measure distances (Space)', measureDone: 'Done', measureClear: 'Clear all',
     measureEmpty: 'No measurements yet', measureTip: 'Click two points. Hold Shift for a straight line.',
     measureTipTouch: 'Tap two points.', measureFirst: 'Click the first point', measureFirstTouch: 'Tap the first point',
@@ -60,6 +61,7 @@ const STRINGS = {
     err: 'Visningens filer kunde inte laddas.', start: 'Start', goTo: 'Gå till', floor: 'Våning', wholeHouse: 'Hela huset',
     mapHint: 'Klicka på ett rum för att gå dit · dra för att vrida huset', mapHintTouch: 'Tryck på ett rum för att gå dit',
     quality: 'Kvalitet', qAuto: 'Auto', qHigh: 'Hög', qLight: 'Lätt', mb: 'MB',
+    tools: 'Verktyg', measureKeyShort: 'Mellanslag',
     measure: 'Mät', measureKey: 'Mät avstånd (mellanslag)', measureDone: 'Klar', measureClear: 'Rensa alla',
     measureEmpty: 'Inga mätningar än', measureTip: 'Klicka på två punkter. Håll Shift för rak linje.',
     measureTipTouch: 'Tryck på två punkter.', measureFirst: 'Klicka på första punkten', measureFirstTouch: 'Tryck på första punkten',
@@ -213,6 +215,11 @@ async function main() {
     mapLarge.mode = 'large';
     mapSmall = new TourMap($('mapSmall'), tour.map, { onPick: pick });
     mapSmall.mode = 'small';
+    // turn the house so it's seen the way you'll look into it
+    const first = mapLarge.rooms.find((r) => r.id === pendingRoom || (r.name || '').toLowerCase() === String(pendingRoom || '').toLowerCase())
+      || mapLarge.room(tour.map.startRoom);
+    const yaw0 = first?.start ? first.start.yaw || 0 : tour.spawn?.yaw || 0;
+    mapLarge.faceView(yaw0); mapSmall.faceView(yaw0);
     // storey pickers: the big map (whole house before you enter, your storey once inside) and the small one
     const levels = tour.map.levels || [];
     if (levels.length > 1) {
@@ -471,13 +478,16 @@ async function main() {
   addEventListener('keyup', (e) => keys.delete(e.code));
   addEventListener('blur', () => keys.clear());
 
+  let lockChangedAt = 0;
+  document.addEventListener('pointerlockchange', () => { lockChangedAt = performance.now(); });
   const look = (dx, dy, k) => {
     yaw -= dx * k;
     pitch = Math.max(-85, Math.min(85, pitch - dy * k));
   };
   document.addEventListener('mousemove', (e) => {
     // (Chrome sometimes reports a huge jump when the lock starts or ends - ignore those)
-    if (document.pointerLockElement === canvas && Math.abs(e.movementX) < 250 && Math.abs(e.movementY) < 250) look(e.movementX, e.movementY, 0.12);
+    if (document.pointerLockElement === canvas && performance.now() - lockChangedAt > 150
+      && Math.abs(e.movementX) < 250 && Math.abs(e.movementY) < 250) look(e.movementX, e.movementY, 0.12);
   });
 
   // touch: joystick on the left, drag anywhere else to look
@@ -522,6 +532,7 @@ async function main() {
   let entered = false;
   function start() {
     active = true; entered = true;
+    mapSmall?.faceView(yaw);
     intro.classList.add('hidden');
     $('hud').classList.remove('hidden');
     showMini();
@@ -530,9 +541,9 @@ async function main() {
   }
   function pause() {
     if (measure?.on) measure.setOn(false);
-    if (touch && measure) $('measureBtn').blur();
     active = false; keys.clear();
-    if (mapLarge && entered) {  // inside the tour: the big map shows the storey you're on
+    if (mapLarge && entered) {  // inside the tour: the big map shows the storey you're on, turned the way you look
+      mapLarge.faceView(yaw);
       mapLarge.only = mapLarge.hereLevel;
       if ($('mapFloor').options.length) $('mapFloor').value = String(mapLarge.only);
     }
@@ -557,6 +568,7 @@ async function main() {
     const btn = $('gyroBtn');
     btn.innerHTML = PHONE_FLIP;
     btn.classList.remove('hidden');
+    $('hud').classList.add('has-gyro');
     btn.title = T.gyro; btn.setAttribute('aria-label', T.gyro);
     btn.addEventListener('click', async () => {
       if (gyro.on) { gyro.disable(); pitch = 0; btn.classList.remove('on'); btn.setAttribute('aria-pressed', 'false'); flash(T.gyroOff); return; }
@@ -571,15 +583,29 @@ async function main() {
 
   // ---- measuring: freeze the view, click two points (Space or the ruler button)
   measure = new Measure({
-    pc, app, camera, splat, cast: castView, T: { ...T, measureTip: touch ? T.measureTipTouch : T.measureTip },
+    pc, app, camera, splat, cast: castView,
+    T: { ...T, measureTip: touch ? T.measureTipTouch : T.measureTip, measureKeyShort: touch ? '' : T.measureKeyShort },
     lang: document.documentElement.lang, planAngle: tour.map?.angle || 0, scale: tour.measureScale || 1,
     onToggle: () => toggleMeasure(),
   });
   $('tools').classList.remove('hidden');
+  // the tools drawer at the right edge (measuring now; room for more later)
+  const drawer = $('drawer');
+  let drawerWasOpen = false;
+  const setDrawer = (open) => {
+    drawer.classList.toggle('open', open);
+    $('drawerTab').setAttribute('aria-expanded', String(open));
+    $('drawerTab').title = T.tools;
+  };
+  $('drawerTitle').textContent = T.tools;
+  drawer.classList.remove('hidden');
+  $('drawerTab').addEventListener('click', (e) => { e.currentTarget.blur(); setDrawer(!drawer.classList.contains('open')); });
+  for (const ev of ['pointerdown', 'click']) drawer.addEventListener(ev, (e) => e.stopPropagation());
   function toggleMeasure() {
     if (!active) return;
     const on = !measure.on;
     keys.clear();
+    if (on) { drawerWasOpen = drawer.classList.contains('open'); setDrawer(true); } else setDrawer(drawerWasOpen);
     measure.setOn(on);
     if (on) {
       if (document.pointerLockElement) document.exitPointerLock?.();

@@ -1,6 +1,6 @@
 // intus measuring tool: freeze the view, click two points on any surface, read the distance.
-// Points snap onto the splat itself (the cloud of Gaussian centres), guided by the collision mesh,
-// so the numbers are as true as the scan allows. Measurements stay in the scene for the whole visit.
+// Points land on the real surface under the pointer (see CentreGrid.hit for how, and why that isn't
+// simply "what you see"). Measurements stay in the scene for the whole visit.
 
 export const RULER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
   + '<path d="M3.5 15.5 15.5 3.5l5 5-12 12z"/><path d="M6.5 12.5l2 2M9 10l1.2 1.2M11.5 7.5l2 2M14 5l1.2 1.2"/></svg>';
@@ -40,7 +40,7 @@ class CentreGrid {
     return i + this.nx * (j + this.ny * k);
   }
 
-  // centres within radius r(t) of the ray o + t d (unit d), as [t, x, y, z] rows sorted by t
+  // centres within radius r(t) of the ray o + t d (unit d), as [t, x, y, z, index] rows sorted by t
   _near(o, d, tMin, tMax, R0, RK) {
     const seen = new Set(), C = this.centres, out = [];
     const reach = Math.ceil(Math.max(R0, tMax * RK) / this.cell);
@@ -58,66 +58,131 @@ class CentreGrid {
           const tt = vx * d[0] + vy * d[1] + vz * d[2];
           if (tt < tMin || tt > tMax) continue;
           const r = Math.max(R0, tt * RK);
-          if (vx * vx + vy * vy + vz * vz - tt * tt < r * r) out.push([tt, x, y, z]);
+          if (vx * vx + vy * vy + vz * vz - tt * tt < r * r) out.push([tt, x, y, z, i]);
         }
       }
     }
     return out.sort((p, q) => p[0] - q[0]);
   }
 
-  // First surface along the ray. The Gaussians are sparse (each covers several cm), so: find the
-  // nearest place where several centres agree (a surface, not a stray floater), fit a plane through
-  // the centres there, and intersect the ray with it - exact on walls, floors, ceilings and tops.
-  hit(o, d, tMin, tMax) {
-    for (const [R0, RK] of [[0.05, 0.012], [0.1, 0.02]]) {
-      const pts = this._near(o, d, tMin, tMax, R0, RK);
-      for (let i = 0; i < pts.length; i++) {
-        let j = i;
-        while (j + 1 < pts.length && pts[j + 1][0] - pts[i][0] < 0.1) j++;
-        if (j - i + 1 < 4) continue;
-        const t0 = pts[(i + j) >> 1][0];
-        const local = pts.filter((q) => q[0] > pts[i][0] - 0.05 && q[0] < pts[i][0] + 0.25);
-        const t = planeHit(local, o, d, t0);
-        return t ?? t0;
+  // centres within r of point p, as [t(along d from o), x, y, z, index] rows
+  _ball(p, r, o, d) {
+    const C = this.centres, out = [], reach = Math.ceil(r / this.cell);
+    for (let a = -reach; a <= reach; a++) for (let b = -reach; b <= reach; b++) for (let c = -reach; c <= reach; c++) {
+      const id = this._cell(p[0] + a * this.cell, p[1] + b * this.cell, p[2] + c * this.cell);
+      if (id < 0) continue;
+      for (let s = this.start[id], e = this.start[id + 1]; s < e; s++) {
+        const i = this.items[s], x = C[i * 3], y = C[i * 3 + 1], z = C[i * 3 + 2];
+        if ((x - p[0]) ** 2 + (y - p[1]) ** 2 + (z - p[2]) ** 2 > r * r) continue;
+        out.push([(x - o[0]) * d[0] + (y - o[1]) * d[1] + (z - o[2]) * d[2], x, y, z, i]);
       }
     }
-    return null;
+    return out;
+  }
+
+  // The surface under a ray: { t, n } or null.
+  //
+  // What you see in a splat is not always where the surface is: glossy tiles, polished floors and
+  // glass are drawn by Gaussians that sit behind the real surface, like a reflection. So the
+  // visible colour can't be trusted for depth. Instead this looks for the first place along the
+  // ray where the Gaussians form a real surface (enough opacity in a thin layer, lying in a plane),
+  // and never goes past the walls and floors of the collision model (which is built from solid
+  // splats only). With no such layer it falls back to the collision surface, refined by a plane fit.
+  hit(o, d, tMin, tColl, nColl, op) {
+    const wt = (i) => (op ? op[i] : 0.3);
+    const far = tColl != null ? tColl + 0.25 : 12;
+    const WIN = 0.08;
+    // a thin cone first; then a wider one, where only a clear plane counts (sparse, glossy surfaces)
+    for (const [R0, RK, W0, needPlane] of [[0.06, 0.01, 0.5, false], [0.13, 0.02, 0.8, true]]) {
+      const rows = this._near(o, d, tMin, far, R0, RK);
+      const W = rows.map((r) => wt(r[4]));
+      let jEnd = 0, acc = 0;
+      for (let i = 0; i < rows.length; i++) {
+        if (jEnd < i) { jEnd = i; acc = 0; }
+        while (jEnd < rows.length && rows[jEnd][0] - rows[i][0] < WIN) acc += W[jEnd++];
+        const ww = acc;
+        acc -= W[i];
+        if (ww < W0) continue;
+        const win = rows.slice(i, jEnd), ws = W.slice(i, jEnd);
+        let sw = 0, st = 0;
+        win.forEach((r, k) => { sw += ws[k]; st += r[0] * ws[k]; });
+        const tm = st / sw;
+        const plane = win.length >= 5 ? fitPlane(win, ws) : null;
+        if (!plane && (needPlane || ww < 2)) continue;     // a few loose specks: haze, not a surface
+        if (plane) {
+          const tp = rayPlane(plane, o, d);
+          if (tp !== null && Math.abs(tp - tm) < 0.1) return { t: tp, n: plane[0] };
+          if (needPlane) continue;
+        }
+        return { t: tm, n: null };
+      }
+    }
+    if (tColl == null) return null;
+    // something solid is there (the collision model says so): take the densest splat layer around it
+    {
+      const rows = this._near(o, d, Math.max(tMin, tColl - 0.15), tColl + 0.25, 0.13, 0.02);
+      const W = rows.map((r) => wt(r[4]));
+      let best = null, jEnd = 0, acc = 0;
+      for (let i = 0; i < rows.length; i++) {
+        if (jEnd < i) { jEnd = i; acc = 0; }
+        while (jEnd < rows.length && rows[jEnd][0] - rows[i][0] < WIN) acc += W[jEnd++];
+        if (!best || acc > best.w) best = { w: acc, i, j: jEnd };
+        acc -= W[i];
+      }
+      if (best && best.w >= 0.3) {
+        let sw = 0, st = 0;
+        for (let k = best.i; k < best.j; k++) { sw += W[k]; st += rows[k][0] * W[k]; }
+        const win = rows.slice(best.i, best.j), plane = win.length >= 5 ? fitPlane(win, W.slice(best.i, best.j)) : null;
+        const tp = plane ? rayPlane(plane, o, d) : null;
+        if (tp !== null && Math.abs(tp - st / sw) < 0.08) return { t: tp, n: plane[0] };
+        return { t: st / sw, n: nColl };
+      }
+    }
+    // the collision surface (5 cm voxels), refined by a plane through the splats around it
+    const p = [o[0] + d[0] * tColl, o[1] + d[1] * tColl, o[2] + d[2] * tColl];
+    const near = this._ball(p, 0.2, o, d);
+    const plane = near.length >= 6 ? fitPlane(near, near.map((r) => wt(r[4]))) : null;
+    if (plane) {
+      const tp = rayPlane(plane, o, d);
+      if (tp !== null && Math.abs(tp - tColl) < 0.08) return { t: tp, n: plane[0] };
+    }
+    return { t: tColl, n: nColl };
   }
 }
 
-// least-squares plane through points ([t,x,y,z] rows), dropping outliers once; ray o + t d meets it at t
-function planeHit(rows, o, d, tGuess) {
-  let pts = rows.map((r) => [r[1], r[2], r[3]]);
-  let plane = null;
-  for (let pass = 0; pass < 2; pass++) {
-    if (pts.length < 4) return plane ? rayPlane(plane, o, d, tGuess) : null;
-    plane = fitPlane(pts);
-    if (!plane) return null;
-    const [n, c] = plane;
-    pts = pts.filter((p) => Math.abs((p[0] - c[0]) * n[0] + (p[1] - c[1]) * n[1] + (p[2] - c[2]) * n[2]) < 0.03);
-  }
-  return rayPlane(plane, o, d, tGuess);
-}
-function rayPlane([n, c], o, d, tGuess) {
+function rayPlane([n, c], o, d) {
   const den = n[0] * d[0] + n[1] * d[1] + n[2] * d[2];
-  if (Math.abs(den) < 0.2) return null;       // grazing: trust the cluster instead
-  const t = ((c[0] - o[0]) * n[0] + (c[1] - o[1]) * n[1] + (c[2] - o[2]) * n[2]) / den;
-  return Math.abs(t - tGuess) < 0.15 ? t : null;
+  if (Math.abs(den) < 0.2) return null;       // grazing: not reliable
+  return ((c[0] - o[0]) * n[0] + (c[1] - o[1]) * n[1] + (c[2] - o[2]) * n[2]) / den;
 }
-function fitPlane(pts) {
-  const n = pts.length, c = [0, 0, 0];
-  for (const p of pts) { c[0] += p[0]; c[1] += p[1]; c[2] += p[2]; }
-  c[0] /= n; c[1] /= n; c[2] /= n;
+// weighted least-squares plane through [t,x,y,z,...] rows, one round of outlier removal
+function fitPlane(rows, ws) {
+  let pts = rows.map((r, k) => [r[1], r[2], r[3], ws[k]]), plane = null;
+  for (let pass = 0; pass < 2; pass++) {
+    if (pts.length < 5) return plane;
+    const fit = fitOnce(pts);
+    if (!fit) return plane;
+    plane = fit;
+    const [n, c] = fit;
+    pts = pts.filter((p) => Math.abs((p[0] - c[0]) * n[0] + (p[1] - c[1]) * n[1] + (p[2] - c[2]) * n[2]) < 0.025);
+  }
+  return plane;
+}
+function fitOnce(pts) {
+  let sw = 0; const c = [0, 0, 0];
+  for (const p of pts) { sw += p[3]; c[0] += p[0] * p[3]; c[1] += p[1] * p[3]; c[2] += p[2] * p[3]; }
+  if (sw <= 0) return null;
+  c[0] /= sw; c[1] /= sw; c[2] /= sw;
   const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
   for (const p of pts) {
     const q = [p[0] - c[0], p[1] - c[1], p[2] - c[2]];
-    for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) A[a][b] += q[a] * q[b];
+    for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) A[a][b] += p[3] * q[a] * q[b] / sw;
   }
   // Jacobi eigen-decomposition of the 3x3 covariance; the normal is the smallest eigenvector
   const V = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
   for (let sweep = 0; sweep < 12; sweep++) {
     for (const [p, q] of [[0, 1], [0, 2], [1, 2]]) {
-      if (Math.abs(A[p][q]) < 1e-12) continue;
+      if (Math.abs(A[p][q]) < 1e-14) continue;
       const th = (A[q][q] - A[p][p]) / (2 * A[p][q]);
       const t = Math.sign(th || 1) / (Math.abs(th) + Math.sqrt(th * th + 1));
       const cs = 1 / Math.sqrt(t * t + 1), sn = t * cs;
@@ -128,9 +193,9 @@ function fitPlane(pts) {
   }
   const ev = [A[0][0], A[1][1], A[2][2]];
   const m = ev.indexOf(Math.min(...ev));
-  // a plane needs spread in two directions; a blob or a line can't define one
   const sorted = [...ev].sort((x, y) => x - y);
-  if (sorted[1] < 4 * sorted[0] || sorted[1] / n < 0.0004) return null;
+  // a plane needs spread in two directions and little thickness
+  if (sorted[1] < 4 * sorted[0] || sorted[1] < 0.0004) return null;
   return [[V[0][m], V[1][m], V[2][m]], c];
 }
 
@@ -159,10 +224,9 @@ export class Measure {
     const T = this.T;
     this.layer = $('measureLayer'); this.ctx = this.layer.getContext('2d');
     this.cross = $('measureCross');
-    this.btn = $('measureBtn'); this.panel = $('measurePanel'); this.listEl = $('mpList');
-    this.btn.innerHTML = RULER + '<em class="count hidden"></em>';
-    this.btn.title = T.measureKey; this.btn.setAttribute('aria-label', T.measure);
-    $('mpTitle').textContent = T.measure;
+    this.btn = $('toolMeasure'); this.panel = $('measureSec'); this.listEl = $('mpList'); this.countEl = $('drawerCount');
+    this.btn.innerHTML = `<span class="ti">${RULER}</span><span class="tl"><b>${T.measure}</b>${T.measureKeyShort ? `<small>${T.measureKeyShort}</small>` : ''}</span>`;
+    this.btn.title = T.measureKey;
     $('mpTip').textContent = T.measureTip;
     $('mpDone').textContent = T.measureDone;
     $('mpClear').textContent = T.measureClear;
@@ -190,8 +254,7 @@ export class Measure {
     this.listEl.innerHTML = n ? this.list.map((m, i) => `<li data-i="${i}"><span class="n">${i + 1}</span><b>${this.fmt(dist(m.a, m.b))}</b>${m.axis ? `<i>${m.axis}</i>` : ''}<button data-del="${i}" aria-label="×">×</button></li>`).join('')
       : `<li class="empty">${this.T.measureEmpty}</li>`;
     document.getElementById('mpClear').disabled = !n;
-    const c = this.btn.querySelector('.count');
-    c.textContent = n; c.classList.toggle('hidden', !n);
+    this.countEl.textContent = n; this.countEl.classList.toggle('hidden', !n);
   }
 
   setOn(v) {
@@ -199,6 +262,7 @@ export class Measure {
     this.first = null; this.hover = null;
     this.panel.classList.toggle('hidden', !v);
     this.btn.classList.toggle('on', v);
+    this.btn.setAttribute('aria-pressed', String(v));
     this.cross.classList.add('hidden');
     document.body.classList.toggle('measuring', v);
     if (v) this._ensureGrid();
@@ -211,6 +275,21 @@ export class Measure {
     if (!centres?.length || this.gridRes === res) return;
     this.gridRes = res;
     this.grid = new CentreGrid(centres);
+    this.op = null;
+    // each Gaussian's opacity (to tell surfaces from haze) is read back from the GPU once, in the background
+    const gd = res.gsplatData;
+    if (gd?.decompress) {
+      const sb = gd.shBands;
+      gd.shBands = 0;            // colours beyond the base aren't needed here
+      const job = gd.decompress();
+      gd.shBands = sb;
+      job.then((data) => {
+        if (this.gridRes !== res) return;
+        const O = data.getProp('opacity'), op = new Float32Array(O.length);
+        for (let i = 0; i < O.length; i++) op[i] = 1 / (1 + Math.exp(-O[i]));
+        this.op = op;
+      }).catch((e) => console.warn('measure: splat data unavailable', e));
+    }
   }
 
   ray(x, y) {
@@ -220,21 +299,24 @@ export class Measure {
     return { o: [o.x, o.y, o.z], d: d.map((v) => v / l) };
   }
 
-  // the surface point under a screen position (CSS pixels on the canvas)
+  // the surface under a screen position (CSS pixels on the canvas): { p, n } in world space, or null
   pickAt(x, y) {
     const { o, d } = this.ray(x, y);
     const coll = this.cast(o, d);
     const tColl = coll ? Math.hypot(coll.p[0] - o[0], coll.p[1] - o[1], coll.p[2] - o[2]) : null;
     this._ensureGrid();
-    let t = null;
+    let h = null;
     if (this.grid) {
-      const pc = this.pc, inv = new pc.Mat4().copy(this.splat.getWorldTransform()).invert();
+      const pc = this.pc, M = this.splat.getWorldTransform(), inv = new pc.Mat4().copy(M).invert();
       const ol = inv.transformPoint(new pc.Vec3(...o)), dl = inv.transformVector(new pc.Vec3(...d)).normalize();
-      t = this.grid.hit([ol.x, ol.y, ol.z], [dl.x, dl.y, dl.z], 0.15, (tColl ?? 12) + 0.35);
-    }
-    if (t === null) t = tColl;
-    if (t === null) return null;
-    return [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t];
+      const nl = coll ? inv.transformVector(new pc.Vec3(...coll.n)) : null;
+      h = this.grid.hit([ol.x, ol.y, ol.z], [dl.x, dl.y, dl.z], 0.12, tColl, nl && [nl.x, nl.y, nl.z], this.op);
+      if (h?.n) { const nw = M.transformVector(new pc.Vec3(...h.n)).normalize(); h.n = [nw.x, nw.y, nw.z]; }
+    } else if (coll) h = { t: tColl, n: coll.n };
+    if (!h) return null;
+    let n = h.n;
+    if (n && n[0] * d[0] + n[1] * d[1] + n[2] * d[2] > 0) n = n.map((v) => -v);   // facing the viewer
+    return { p: [o[0] + d[0] * h.t, o[1] + d[1] * h.t, o[2] + d[2] * h.t], n };
   }
 
   // lock the second point to the nearest of: vertical, along the walls one way, the other way
@@ -262,9 +344,10 @@ export class Measure {
   move(x, y, shift) {
     if (!this.on) return;
     const snap = this._snapToEnds(x, y);
-    let p = snap || this.pickAt(x, y), axis = null;
+    const hit = snap ? { p: snap, n: null } : this.pickAt(x, y);
+    let p = hit?.p || null, axis = null;
     if (p && this.first && shift) ({ p, axis } = this._lock(this.first, p));
-    this.hover = { p, x, y, snapped: !!snap, axis };
+    this.hover = { p, n: axis ? null : hit?.n, x, y, snapped: !!snap, axis };
     this.cross.classList.remove('hidden');
     this.cross.classList.toggle('miss', !p);
     this.cross.classList.toggle('snap', !!snap);
@@ -330,7 +413,7 @@ export class Measure {
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    if (!this.list.length && !this.first) return;
+    if (!this.list.length && !this.first && !(this.on && this.hover?.p)) return;
     const cam = this.camera.camera;
     this._vp = (this._vp || new this.pc.Mat4()).mul2(cam.projectionMatrix, cam.viewMatrix);
     this.W = W; this.H = H;
@@ -343,6 +426,8 @@ export class Measure {
       this._line(m.a, m.b, { alpha: seen ? 1 : 0.28, strong: i === this.hl });
       if (seen) labels.push({ m, i });
     });
+    // where the pointer lands: a small ring lying on the surface, so you can see it's on it
+    if (this.on && this.hover?.p && this.hover.n) this._ring(this.hover.p, this.hover.n);
     if (this.first) {
       const to = this.hover?.p;
       this._dot(this.first, 1);
@@ -368,6 +453,24 @@ export class Measure {
     ctx.beginPath(); ctx.moveTo(...s[0]); ctx.lineTo(...s[1]); ctx.stroke();
     ctx.restore();
     this._dot(a, alpha); this._dot(b, alpha);
+  }
+
+  _ring(p, n) {
+    const a = Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    const u = norm(cross(n, a)), v = cross(n, u), R = 0.07, pts = [];
+    for (let k = 0; k <= 32; k++) {
+      const t = (k / 32) * Math.PI * 2, c = Math.cos(t) * R, s = Math.sin(t) * R;
+      const q = this.toScreen([p[0] + u[0] * c + v[0] * s, p[1] + u[1] * c + v[1] * s, p[2] + u[2] * c + v[2] * s]);
+      if (!q) return;
+      pts.push(q);
+    }
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(...q) : ctx.moveTo(...q)));
+    ctx.fillStyle = 'rgba(232,220,199,.22)'; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(13,13,14,.45)'; ctx.stroke();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = ACCENT; ctx.stroke();
+    ctx.restore();
   }
 
   _dot(p, alpha) {
@@ -397,3 +500,5 @@ export class Measure {
 }
 
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = (a) => { const l = Math.hypot(...a) || 1; return a.map((x) => x / l); };

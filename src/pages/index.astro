@@ -69,13 +69,21 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
   <div class="keypad hidden" id="keypad" aria-hidden="true"></div>
   <div class="tools hidden" id="tools">
     <button class="gyro-btn hidden" id="gyroBtn" aria-pressed="false"></button>
-    <button class="tool-btn" id="measureBtn" aria-pressed="false"></button>
   </div>
-  <aside class="measure-panel hidden" id="measurePanel">
-    <div class="mp-head"><b id="mpTitle"></b><button class="mp-done" id="mpDone"></button></div>
-    <p class="mp-tip" id="mpTip"></p>
-    <ol class="mp-list" id="mpList"></ol>
-    <button class="mp-clear" id="mpClear"></button>
+  <aside class="drawer hidden" id="drawer">
+    <button class="drawer-tab" id="drawerTab" aria-expanded="false" aria-controls="drawerBody">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg>
+      <em class="count hidden" id="drawerCount"></em>
+    </button>
+    <div class="drawer-body" id="drawerBody">
+      <p class="drawer-title" id="drawerTitle"></p>
+      <button class="tool-row" id="toolMeasure" aria-pressed="false"></button>
+      <div class="measure-sec hidden" id="measureSec">
+        <p class="mp-tip" id="mpTip"></p>
+        <ol class="mp-list" id="mpList"></ol>
+        <div class="mp-actions"><button class="mp-clear" id="mpClear"></button><button class="mp-done" id="mpDone"></button></div>
+      </div>
+    </div>
   </aside>
   <div class="measure-cross hidden" id="measureCross"><i></i></div>
   <div class="mini-wrap hidden" id="miniWrap">
