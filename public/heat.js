@@ -4,7 +4,8 @@
 export const CELL = 0.25;
 const TOKEN_KEY = 'intus.stats.token';
 
-export const statsUrl = () => (document.querySelector('meta[name="intus-stats"]')?.content || '').replace(/\/+$/, '');
+// the first address is the intus-stats service this page reads from; further ones only receive visits (see stats.js)
+export const statsUrl = () => (document.querySelector('meta[name="intus-stats"]')?.content || '').trim().split(/\s+/)[0].replace(/\/+$/, '');
 export const getToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } };
 export const setToken = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch { /* private mode */ } };
 

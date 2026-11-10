@@ -23,7 +23,8 @@ export function statsEnabled(url) {
 
 export class VisitRecorder {
   constructor({ url, tour, device, lang }) {
-    this.url = url.replace(/\/+$/, '') + '/collect';
+    // the page may name several stats services, separated by spaces: each gets the same visit
+    this.urls = url.split(/\s+/).filter(Boolean).map((u) => u.replace(/\/+$/, '') + '/collect');
     this.base = { v: 1, tour, sid: visitId(), started: Date.now(), device, lang };
     this.dur = 0; this.acc = 0; this.pathAcc = PATH_EVERY;
     this.rooms = {}; this.order = []; this.walk = {}; this.look = {}; this.path = [];
@@ -74,11 +75,13 @@ export class VisitRecorder {
     });
     this.dirty = false;
     this.lastSend = performance.now();
-    try {
-      // text/plain keeps it a "simple" request: no preflight, and it survives the page closing
-      if (!navigator.sendBeacon?.(this.url, new Blob([body], { type: 'text/plain' }))) {
-        fetch(this.url, { method: 'POST', body, keepalive: true, headers: { 'Content-Type': 'text/plain' } }).catch(() => {});
-      }
-    } catch { /* stats must never break the tour */ }
+    for (const url of this.urls) {
+      try {
+        // text/plain keeps it a "simple" request: no preflight, and it survives the page closing
+        if (!navigator.sendBeacon?.(url, new Blob([body], { type: 'text/plain' }))) {
+          fetch(url, { method: 'POST', body, keepalive: true, headers: { 'Content-Type': 'text/plain' } }).catch(() => {});
+        }
+      } catch { /* stats must never break the tour */ }
+    }
   }
 }
