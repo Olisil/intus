@@ -171,6 +171,14 @@ body:not(.ready) .room-chip { opacity: .55; }
 .drawer { position: absolute; top: 16px; right: 0; display: flex; align-items: flex-start; pointer-events: none;
   transform: translateX(var(--dw)); transition: transform .28s cubic-bezier(.2,.7,.2,1); --dw: 256px; }
 .has-round .drawer { top: 80px; }
+.fs-help { position: absolute; top: 64px; right: 0; z-index: 6; width: min(300px, calc(100vw - 24px)); pointer-events: auto;
+  padding: 14px 40px 14px 16px; border-radius: 16px; background: var(--glass); border: 1px solid var(--line);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+.fs-help b { display: block; font-weight: 500; font-size: 14px; margin-bottom: 6px; }
+.fs-help p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--muted); }
+.fs-help-x { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; background: transparent; color: var(--muted); cursor: pointer; }
+.fs-help-x svg { width: 18px; height: 18px; }
 .drawer.open { transform: none; }
 .drawer-tab { position: relative; pointer-events: auto; width: 34px; height: 64px; margin-top: 10px; padding: 0; cursor: pointer;
   display: grid; place-items: center; color: var(--ink); background: rgba(18,18,20,.72); border: 1px solid var(--line); border-right: 0;

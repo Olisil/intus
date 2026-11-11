@@ -43,7 +43,8 @@ const STRINGS = {
     err: 'The tour files could not be loaded.', start: 'Start', goTo: 'Go to', floor: 'Floor', wholeHouse: 'Whole house',
     mapHint: 'Click a room to go there · drag to turn the house', mapHintTouch: 'Tap a room to go there',
     quality: 'Quality', qAuto: 'Auto', qHigh: 'High', qLight: 'Light', mb: 'MB',
-    tools: 'Tools', measureKeyShort: 'Space', fullscreen: 'Full screen (F)', fullscreenExit: 'Exit full screen (F)',
+    tools: 'Tools', measureKeyShort: 'Space', fullscreen: 'Full screen (F)', fullscreenExit: 'Exit full screen (F)', close: 'Close',
+    fsHelpTitle: 'Full screen', fsHelp: "This browser can't show a web page in full screen. Add the tour to your home screen instead: open the browser's Share menu and choose Add to Home Screen. Opened from there, it fills the whole screen.",
     measure: 'Measure', measureKey: 'Measure distances (Space)', measureDone: 'Done', measureClear: 'Clear all',
     measureEmpty: 'No measurements yet', measureTip: 'Click two points. Hold Shift for a straight line.',
     measureTipTouch: 'Tap two points.', measureFirst: 'Click the first point', measureFirstTouch: 'Tap the first point',
@@ -61,7 +62,8 @@ const STRINGS = {
     err: 'Visningens filer kunde inte laddas.', start: 'Start', goTo: 'Gå till', floor: 'Våning', wholeHouse: 'Hela huset',
     mapHint: 'Klicka på ett rum för att gå dit · dra för att vrida huset', mapHintTouch: 'Tryck på ett rum för att gå dit',
     quality: 'Kvalitet', qAuto: 'Auto', qHigh: 'Hög', qLight: 'Lätt', mb: 'MB',
-    tools: 'Verktyg', measureKeyShort: 'Mellanslag', fullscreen: 'Helskärm (F)', fullscreenExit: 'Lämna helskärm (F)',
+    tools: 'Verktyg', measureKeyShort: 'Mellanslag', fullscreen: 'Helskärm (F)', fullscreenExit: 'Lämna helskärm (F)', close: 'Stäng',
+    fsHelpTitle: 'Helskärm', fsHelp: 'Den här webbläsaren kan inte visa en webbsida i helskärm. Lägg i stället visningen på hemskärmen: öppna webbläsarens Dela-meny och välj Lägg till på hemskärmen. Öppnad därifrån fyller den hela skärmen.',
     measure: 'Mät', measureKey: 'Mät avstånd (mellanslag)', measureDone: 'Klar', measureClear: 'Rensa alla',
     measureEmpty: 'Inga mätningar än', measureTip: 'Klicka på två punkter. Håll Shift för rak linje.',
     measureTipTouch: 'Tryck på två punkter.', measureFirst: 'Klicka på första punkten', measureFirstTouch: 'Tryck på första punkten',
@@ -122,6 +124,7 @@ function toggleFullscreen() {
   }
 }
 const FS_ENTER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>';
+const CLOSE_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
 const FS_EXIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg>';
 function weakDevice() {
   const c = navigator.connection || {};
@@ -584,7 +587,21 @@ async function main() {
   hint.textContent = touch ? T.hintTouch : T.hint;
   setTimeout(() => { hint.style.opacity = 0; }, 7000);
   const flash = (msg) => { hint.textContent = msg; hint.style.opacity = 1; setTimeout(() => { hint.style.opacity = 0; }, 2500); };
-  // full screen (hidden where the browser can't do it for a page, like Safari on iPhone)
+  // full screen. Where the browser can't do it for a page (any browser on iPhone), the button explains
+  // how to get it from the home screen instead; opened from there it's already full screen, so no button.
+  const standalone = navigator.standalone || matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
+  if (!fullscreenOK && !standalone) {
+    const fb = $('fsBtn'), help = $('fsHelp');
+    fb.classList.remove('hidden');
+    $('hud').classList.add('has-round');
+    fb.innerHTML = FS_ENTER; fb.title = T.fullscreen.replace(/ \(F\)$/, ''); fb.setAttribute('aria-label', fb.title);
+    $('fsHelpTitle').textContent = T.fsHelpTitle; $('fsHelpText').textContent = T.fsHelp;
+    $('fsHelpX').innerHTML = CLOSE_X; $('fsHelpX').setAttribute('aria-label', T.close);
+    const setHelp = (open) => { help.classList.toggle('hidden', !open); fb.setAttribute('aria-pressed', String(open)); };
+    fb.addEventListener('click', (e) => { e.stopPropagation(); setHelp(help.classList.contains('hidden')); });
+    $('fsHelpX').addEventListener('click', () => setHelp(false));
+    addEventListener('pointerdown', (e) => { if (!help.classList.contains('hidden') && !help.contains(e.target) && e.target !== fb && !fb.contains(e.target)) setHelp(false); });
+  }
   if (fullscreenOK) {
     const fb = $('fsBtn');
     fb.classList.remove('hidden');
