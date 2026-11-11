@@ -25,16 +25,48 @@ export function yawPitchOf(q) {
   return { yaw: (Math.atan2(-fx, -fz) * 180) / Math.PI, pitch: (Math.asin(Math.max(-1, Math.min(1, fy))) * 180) / Math.PI };
 }
 
+// Which way the screen is turned, as an angle in the same convention as window.orientation
+// (90 = top of the device to the left). Read from gravity rather than trusted from the browser:
+// on some devices (foldables, some tablets and browsers) screen.orientation.angle does not match
+// the motion sensor's axes, and the whole view comes out turned on its side.
+const browserAngle = () => {
+  const a = screen.orientation?.angle ?? window.orientation ?? 0;
+  return ((Math.round(a / 90) * 90) % 360 + 360) % 360;
+};
+
 export class Gyro {
   constructor() {
     this.on = false; this.raw = null; this.q = null; this.offset = 0; this.last = 0;
+    this.angle = browserAngle(); this._sure = false;   // _sure: the angle has been read from gravity
+    this._pending = null; this._resizedAt = -1e9;
     this._h = (e) => {
       if (e.alpha === null || e.beta === null) return;
       const d = Math.PI / 180;
-      const orient = (screen.orientation?.angle ?? window.orientation ?? 0) * d;
-      this.raw = deviceQuat(e.alpha * d, e.beta * d, e.gamma * d, orient);
+      this._screenAngle(e.beta * d, (e.gamma || 0) * d);
+      this.raw = deviceQuat(e.alpha * d, e.beta * d, (e.gamma || 0) * d, this.angle * d);
       this.last = performance.now();
     };
+    // the page turned: switch now if gravity already says so, instead of waiting
+    this._r = () => {
+      this._resizedAt = performance.now();
+      if (this._pending) { this.angle = this._pending.angle; this._pending = null; }
+    };
+  }
+
+  // gravity in the device's own axes (x right, y up, z out of the screen) -> which screen edge is down
+  _screenAngle(beta, gamma) {
+    const gx = Math.cos(beta) * Math.sin(gamma), gy = -Math.sin(beta);
+    if (Math.hypot(gx, gy) < 0.5) return;            // lying flat-ish (looking at the floor or ceiling): keep the last angle
+    const a = ((Math.atan2(-gx, -gy) * 180) / Math.PI + 360) % 360;
+    const snap = (Math.round(a / 90) * 90) % 360;
+    let off = Math.abs(a - snap); if (off > 180) off = 360 - off;
+    if (off > 30) return;                            // somewhere between two ways: wait
+    const now = performance.now();
+    if (!this._sure) { this.angle = snap; this._sure = true; this._pending = null; return; }
+    if (snap === this.angle) { this._pending = null; return; }
+    if (now - this._resizedAt < 1000) { this.angle = snap; this._pending = null; return; }
+    if (!this._pending || this._pending.angle !== snap) this._pending = { angle: snap, t: now };
+    else if (now - this._pending.t > 600) { this.angle = snap; this._pending = null; }   // the page didn't turn (rotation lock)
   }
 
   static get supported() { return typeof window !== 'undefined' && 'DeviceOrientationEvent' in window; }
@@ -47,6 +79,8 @@ export class Gyro {
       if (r !== 'granted') throw new Error('denied');
     }
     window.addEventListener('deviceorientation', this._h);
+    window.addEventListener('resize', this._r);
+    window.addEventListener('orientationchange', this._r);
     // wait for a first reading, so phones without a gyroscope say so instead of doing nothing
     const t0 = performance.now();
     while (!this.raw && performance.now() - t0 < 1500) await new Promise((r) => setTimeout(r, 50));
@@ -59,7 +93,9 @@ export class Gyro {
 
   disable() {
     window.removeEventListener('deviceorientation', this._h);
-    this.on = false; this.raw = null; this.q = null;
+    window.removeEventListener('resize', this._r);
+    window.removeEventListener('orientationchange', this._r);
+    this.on = false; this.raw = null; this.q = null; this._sure = false; this._pending = null; this.angle = browserAngle();
   }
 
   // look this way now (after jumping to a room, say), whichever way the phone points

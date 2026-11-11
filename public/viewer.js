@@ -43,7 +43,7 @@ const STRINGS = {
     err: 'The tour files could not be loaded.', start: 'Start', goTo: 'Go to', floor: 'Floor', wholeHouse: 'Whole house',
     mapHint: 'Click a room to go there · drag to turn the house', mapHintTouch: 'Tap a room to go there',
     quality: 'Quality', qAuto: 'Auto', qHigh: 'High', qLight: 'Light', mb: 'MB',
-    tools: 'Tools', measureKeyShort: 'Space',
+    tools: 'Tools', measureKeyShort: 'Space', fullscreen: 'Full screen (F)', fullscreenExit: 'Exit full screen (F)',
     measure: 'Measure', measureKey: 'Measure distances (Space)', measureDone: 'Done', measureClear: 'Clear all',
     measureEmpty: 'No measurements yet', measureTip: 'Click two points. Hold Shift for a straight line.',
     measureTipTouch: 'Tap two points.', measureFirst: 'Click the first point', measureFirstTouch: 'Tap the first point',
@@ -61,7 +61,7 @@ const STRINGS = {
     err: 'Visningens filer kunde inte laddas.', start: 'Start', goTo: 'Gå till', floor: 'Våning', wholeHouse: 'Hela huset',
     mapHint: 'Klicka på ett rum för att gå dit · dra för att vrida huset', mapHintTouch: 'Tryck på ett rum för att gå dit',
     quality: 'Kvalitet', qAuto: 'Auto', qHigh: 'Hög', qLight: 'Lätt', mb: 'MB',
-    tools: 'Verktyg', measureKeyShort: 'Mellanslag',
+    tools: 'Verktyg', measureKeyShort: 'Mellanslag', fullscreen: 'Helskärm (F)', fullscreenExit: 'Lämna helskärm (F)',
     measure: 'Mät', measureKey: 'Mät avstånd (mellanslag)', measureDone: 'Klar', measureClear: 'Rensa alla',
     measureEmpty: 'Inga mätningar än', measureTip: 'Klicka på två punkter. Håll Shift för rak linje.',
     measureTipTouch: 'Tryck på två punkter.', measureFirst: 'Klicka på första punkten', measureFirstTouch: 'Tryck på första punkten',
@@ -109,6 +109,20 @@ const DEFAULTS = {
 
 // ---------------------------------------------------------------- device + quality
 const touch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+
+// ---- full screen (the whole page, so the buttons and maps come along)
+const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+const fullscreenOK = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+function toggleFullscreen() {
+  if (!fullscreenOK) return;
+  if (fsElement()) (document.exitFullscreen || document.webkitExitFullscreen)?.call(document)?.catch?.(() => {});
+  else {
+    const el = document.documentElement;
+    (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el, { navigationUI: 'hide' })?.catch?.(() => {});
+  }
+}
+const FS_ENTER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>';
+const FS_EXIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg>';
 function weakDevice() {
   const c = navigator.connection || {};
   if (c.saveData || ['slow-2g', '2g', '3g'].includes(c.effectiveType) || (c.downlink && c.downlink < 4)) return true;
@@ -308,15 +322,20 @@ async function main() {
   const app = new pc.Application(canvas, {
     graphicsDeviceOptions: { antialias: false, alpha: false, powerPreference: 'high-performance' },
   });
-  app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW);
+  // The canvas fills the window through CSS (inset: 0). PlayCanvas' own fill-window mode copies
+  // window.innerWidth/innerHeight into inline pixel sizes when 'resize' fires, and phones often fire
+  // it before those numbers have changed, so the view stayed stretched or squeezed after turning the
+  // device. Instead the drawing buffer follows the canvas' real size, checked every frame.
+  app.setCanvasFillMode(pc.FILLMODE_NONE);
   app.setCanvasResolution(pc.RESOLUTION_AUTO);
+  canvas.style.width = ''; canvas.style.height = '';
   // adaptive resolution: drop the render scale when frames get slow, raise it again when there's room
   const baseRatio = Math.min(window.devicePixelRatio || 1, touch ? 1.5 : 2);
   let renderScale = quality === 'light' ? 0.85 : 1;
   const minScale = Math.max(0.5, 0.75 / baseRatio);
-  const applyScale = () => { app.graphicsDevice.maxPixelRatio = baseRatio * renderScale; app.resizeCanvas(); };
+  const applyScale = () => { app.graphicsDevice.maxPixelRatio = baseRatio * renderScale; app.updateCanvasSize(); };
   applyScale();
-  window.addEventListener('resize', () => app.resizeCanvas());
+  window.addEventListener('resize', () => app.updateCanvasSize());
   app.start();
 
   const camera = new pc.Entity('camera');
@@ -467,6 +486,7 @@ async function main() {
       store.set('minimap', shown ? 'on' : 'off');
     }
     if (EDIT && e.code === 'KeyF') { fly = !fly; vy = 0; }
+    else if (e.code === 'KeyF' && !e.repeat && !e.metaKey && !e.ctrlKey) toggleFullscreen();
     if (EDIT && e.code === 'KeyG' && overlay) overlay.enabled = !overlay.enabled;
     if (EDIT && e.code === 'KeyP') {
       const spawn = { position: [+feet.x.toFixed(3), +feet.y.toFixed(3), +feet.z.toFixed(3)], yaw: +yaw.toFixed(1) };
@@ -564,11 +584,27 @@ async function main() {
   hint.textContent = touch ? T.hintTouch : T.hint;
   setTimeout(() => { hint.style.opacity = 0; }, 7000);
   const flash = (msg) => { hint.textContent = msg; hint.style.opacity = 1; setTimeout(() => { hint.style.opacity = 0; }, 2500); };
+  // full screen (hidden where the browser can't do it for a page, like Safari on iPhone)
+  if (fullscreenOK) {
+    const fb = $('fsBtn');
+    fb.classList.remove('hidden');
+    $('hud').classList.add('has-round');
+    const sync = () => {
+      const on = !!fsElement();
+      fb.innerHTML = on ? FS_EXIT : FS_ENTER;
+      fb.title = on ? T.fullscreenExit : T.fullscreen;
+      fb.setAttribute('aria-label', fb.title); fb.setAttribute('aria-pressed', String(on));
+    };
+    sync();
+    document.addEventListener('fullscreenchange', sync);
+    document.addEventListener('webkitfullscreenchange', sync);
+    fb.addEventListener('click', toggleFullscreen);
+  }
   if (touch && Gyro.supported) {
     const btn = $('gyroBtn');
     btn.innerHTML = PHONE_FLIP;
     btn.classList.remove('hidden');
-    $('hud').classList.add('has-gyro');
+    $('hud').classList.add('has-round');
     btn.title = T.gyro; btn.setAttribute('aria-label', T.gyro);
     btn.addEventListener('click', async () => {
       if (gyro.on) { gyro.disable(); pitch = 0; btn.classList.remove('on'); btn.setAttribute('aria-pressed', 'false'); flash(T.gyroOff); return; }
@@ -686,6 +722,7 @@ async function main() {
 
   app.on('update', (dt) => {
     dt = Math.min(dt, 0.1);
+    app.updateCanvasSize();   // cheap when nothing changed; catches late size changes after turning the device
     // adaptive resolution (only while walking, and not more often than every 1.5 s)
     ema = ema * 0.94 + dt * 0.06;
     const now = performance.now();
