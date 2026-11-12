@@ -99,7 +99,8 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 </div>
 
 <!-- Touch controls -->
-<div id="stick" class="hidden"><div id="knob"></div></div>
+<!-- the whole lower-left corner takes the thumb, not only the drawn stick -->
+<div id="stickZone" class="hidden"><div id="stick"><div id="knob"></div></div></div>
 <!--/intus:body-->
 
 <script is:inline type="module" src="viewer.js"></script>

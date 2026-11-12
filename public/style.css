@@ -40,6 +40,7 @@ h1 { margin: 0; font-family: Fraunces, Georgia, serif; font-weight: 300; font-si
 .dev { position: absolute; top: 16px; right: 16px; padding: 10px 12px; border-radius: 10px; background: rgba(0,0,0,.7);
   font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; white-space: pre; pointer-events: auto; }
 
+#stickZone { position: fixed; left: 0; bottom: 0; width: min(46vw, 360px); height: min(52vh, 360px); z-index: 6; touch-action: none; }
 #stick { position: fixed; left: 28px; bottom: 28px; width: 120px; height: 120px; border-radius: 50%;
   border: 1px solid var(--line); background: rgba(18,18,20,.35); z-index: 6; touch-action: none; }
 #knob { position: absolute; left: 50%; top: 50%; width: 48px; height: 48px; margin: -24px 0 0 -24px; border-radius: 50%; background: rgba(244,241,236,.55); }

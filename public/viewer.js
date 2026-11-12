@@ -514,19 +514,37 @@ async function main() {
   });
 
   // touch: joystick on the left, drag anywhere else to look
-  const stickEl = $('stick'), knob = $('knob');
+  const stickEl = $('stick'), knob = $('knob'), stickZone = $('stickZone');
   buildStick(stickEl, 112);
   buildKeypad($('keypad'));
   let stickId = null, lookId = null, lx = 0, ly = 0;
-  const stickMove = (t) => {
+  // The stick works from anywhere in the lower-left corner: a thumb that lands beside it
+  // (or where the system keeps touches near the screen edge to itself) still steers.
+  // Landing outside the drawn stick moves the stick under the thumb until it lets go.
+  let sx = 0, sy = 0, sr = 56;
+  const stickStart = (t) => {
+    stickEl.style.transform = '';
     const r = stickEl.getBoundingClientRect();
-    let x = (t.clientX - (r.left + r.width / 2)) / (r.width / 2);
-    let y = (t.clientY - (r.top + r.height / 2)) / (r.height / 2);
+    sr = r.width / 2; sx = r.left + sr; sy = r.top + sr;
+    if (Math.hypot(t.clientX - sx, t.clientY - sy) > sr + 12) {
+      const nx = Math.min(Math.max(t.clientX, sr + 8), innerWidth - sr - 8), ny = Math.min(Math.max(t.clientY, sr + 8), innerHeight - sr - 8);
+      stickEl.style.transform = `translate(${nx - sx}px, ${ny - sy}px)`;
+      sx = nx; sy = ny;
+    }
+    stickMove(t);
+  };
+  const stickMove = (t) => {
+    let x = (t.clientX - sx) / sr;
+    let y = (t.clientY - sy) / sr;
     const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m; }
     stick.x = x; stick.y = y;
     knob.style.transform = `translate(${x * 20}px, ${y * 20}px)`;
   };
-  stickEl.addEventListener('touchstart', (e) => { e.preventDefault(); stickId = e.changedTouches[0].identifier; stickMove(e.changedTouches[0]); }, { passive: false });
+  stickZone.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    if (stickId !== null && [...e.touches].some((t) => t.identifier === stickId)) return;   // already steering
+    stickId = e.changedTouches[0].identifier; stickStart(e.changedTouches[0]);
+  }, { passive: false });
   canvas.addEventListener('touchstart', (e) => { const t = e.changedTouches[0]; lookId = t.identifier; lx = t.clientX; ly = t.clientY; }, { passive: true });
   addEventListener('touchmove', (e) => {
     for (const t of e.changedTouches) {
@@ -537,12 +555,14 @@ async function main() {
       }
     }
   }, { passive: true });
-  addEventListener('touchend', (e) => {
+  const touchEnd = (e) => {
     for (const t of e.changedTouches) {
-      if (t.identifier === stickId) { stickId = null; stick.x = stick.y = 0; knob.style.transform = ''; }
+      if (t.identifier === stickId) { stickId = null; stick.x = stick.y = 0; knob.style.transform = ''; stickEl.style.transform = ''; }
       if (t.identifier === lookId) lookId = null;
     }
-  });
+  };
+  addEventListener('touchend', touchEnd);
+  addEventListener('touchcancel', touchEnd);
 
   // ---- enter / pause
   const intro = $('intro'), enter = $('enter');
@@ -559,7 +579,7 @@ async function main() {
     intro.classList.add('hidden');
     $('hud').classList.remove('hidden');
     showMini();
-    if (touch) stickEl.classList.remove('hidden');
+    if (touch) stickZone.classList.remove('hidden');
     else { $('keypad').classList.remove('hidden'); canvas.requestPointerLock?.(); }
   }
   function pause() {
@@ -573,7 +593,7 @@ async function main() {
     $('enterLabel').textContent = T.resume;
     intro.classList.remove('hidden');
     $('hud').classList.add('hidden');
-    if (touch) stickEl.classList.add('hidden');
+    if (touch) stickZone.classList.add('hidden');
     if (document.pointerLockElement) document.exitPointerLock?.();
   }
   enter.addEventListener('click', start);
@@ -663,10 +683,10 @@ async function main() {
     if (on) {
       if (document.pointerLockElement) document.exitPointerLock?.();
       if (gyro.on) { gyro.disable(); pitch = 0; $('gyroBtn').classList.remove('on'); $('gyroBtn').setAttribute('aria-pressed', 'false'); }
-      stickEl.classList.add('hidden');
+      stickZone.classList.add('hidden');
       flash(touch ? T.measureFirstTouch : T.measureFirst);
     } else {
-      if (touch) stickEl.classList.remove('hidden');
+      if (touch) stickZone.classList.remove('hidden');
       else canvas.requestPointerLock?.();
     }
   }
