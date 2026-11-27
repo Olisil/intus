@@ -199,6 +199,54 @@ def image_dirs(root: Path) -> list[Path]:
     return dirs
 
 
+def summary(root: Path) -> list[str]:
+    """One line per folder: how many files of each kind, for the log."""
+    out = []
+    if not root.exists():
+        return [f"{root.name}/: missing"]
+    for d in sorted({p.parent for p in root.rglob("*") if p.is_file()}):
+        kinds: dict[str, int] = {}
+        for f in d.iterdir():
+            if f.is_file():
+                kinds[f.suffix.lower() or "(none)"] = kinds.get(f.suffix.lower() or "(none)", 0) + 1
+        out.append(f"  {d.relative_to(root.parent)}: " + ", ".join(f"{n} {k}" for k, n in sorted(kinds.items())))
+    return out or [f"  {root.name}/: empty"]
+
+
+def flatten_lenses(images: Path, n_videos: int, rep: "Reporter"):
+    """images/v1/cam0 -> images/cam0 (one video) or images/v1-cam0 (several), as Spirula Studio lays out a dataset:
+    one folder per lens directly under images/, so rigs and masks are named cam0, cam1."""
+    for i in range(1, n_videos + 1):
+        stem = images / f"v{i}"
+        if not stem.is_dir():
+            continue
+        for lens in sorted(d for d in stem.iterdir() if d.is_dir()):
+            dest = images / (lens.name if n_videos == 1 else f"v{i}-{lens.name}")
+            if dest.exists():
+                raise RuntimeError(f"{dest.name} exists twice in the frames")
+            lens.rename(dest)
+        if not any(stem.iterdir()):
+            stem.rmdir()
+        else:
+            rep.log(f"  ! left in {stem.name}: {[x.name for x in stem.iterdir()][:5]}")
+
+
+def separate_masks(images: Path, masks: Path, rep: "Reporter"):
+    """If masks landed next to the frames (frame_1.jpg + frame_1.png), move them to masks/<lens>/,
+    or the reconstruction would take them for photos."""
+    moved = 0
+    for d in image_dirs(images):
+        stems = {f.stem for f in d.iterdir() if f.suffix.lower() in (".jpg", ".jpeg")}
+        for f in list(d.iterdir()):
+            if f.suffix.lower() == ".png" and f.stem in stems:
+                dest = masks / d.relative_to(images) / f.name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                f.rename(dest)
+                moved += 1
+    if moved:
+        rep.log(f"  moved {moved} masks out of the frame folders")
+
+
 # ------------------------------------------------------------------ one job
 
 def download(job: dict, f: dict, dest: Path, rep: Reporter):
@@ -339,15 +387,20 @@ def process(job: dict, rep: Reporter) -> dict:
             shutil.copy2(p, dataset / "images" / "photos" / original(p))
 
     def video_rigs() -> list[str]:
-        """The two lenses of each 360 video are one rig, taken in order, with fisheye lenses."""
+        """As Spirula Studio sets up a 360 video: the two lenses (cam0, cam1) are one dual-fisheye rig,
+        and every lens is a thin-prism fisheye. Photos keep the default lens model."""
+        images = dataset / "images"
+        lenses = sorted(d.name for d in images.iterdir() if d.is_dir() and d.name != "photos") if images.exists() else []
         args = []
         for i in range(1, len(videos) + 1):
-            stem = dataset / "images" / f"v{i}"
-            cams = sorted(d.name for d in stem.iterdir() if d.is_dir()) if stem.exists() else []
-            if cams[:2] == ["cam0", "cam1"]:
-                args += ["--rig", f"dual-fisheye=v{i}/cam0,v{i}/cam1", "--sequence", f"v{i}/cam0,v{i}/cam1", "--camera-model", f"v{i}=thin-prism-fisheye"]
-            elif cams:
-                args += ["--sequence", ",".join(f"v{i}/{c}" for c in cams)]
+            pre = "" if len(videos) == 1 else f"v{i}-"
+            if f"{pre}cam0" in lenses and f"{pre}cam1" in lenses:
+                args += ["--rig", f"dual-fisheye={pre}cam0,{pre}cam1"]
+        if lenses and not photos:
+            args += ["--camera-model", "thin-prism-fisheye"]
+        else:
+            for lens in lenses:
+                args += ["--camera-model", f"{lens}=thin-prism-fisheye"]
         return args
 
     base["hasVideo"] = bool(videos)
@@ -365,6 +418,13 @@ def process(job: dict, rep: Reporter) -> dict:
             if watcher:
                 watcher.stop.set()
         rep.check()
+        if st["step"] == "frames":
+            flatten_lenses(dataset / "images", len(videos), rep)
+        if st["step"] == "masks":
+            separate_masks(dataset / "images", dataset / "masks", rep)
+        if st["step"] in ("frames", "masks"):
+            for line in summary(dataset / "images") + (summary(dataset / "masks") if st["step"] == "masks" else []):
+                rep.log(line)
         dirs = image_dirs(dataset / "images")
         if st["step"] == "frames":
             send_preview(job, "frames", lambda: previews.frames(dirs), rep)
