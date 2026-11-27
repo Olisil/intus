@@ -546,7 +546,7 @@ def build_and_upload(job: dict, rep: Reporter, splat: Path, sparse: Path, site: 
         (tour_dir / "tour.json").write_bytes(r.content)
     run([sys.executable, "-u", str(TOOLS / "publish_tour.py"), f"--splat={splat}", f"--sparse={sparse}", f"--name={tour['id']}",
          f"--title={tour['title']}", f"--subtitle={tour['subtitle']}", f"--eyebrow={tour['eyebrow']}", f"--lang={tour['lang']}",
-         f"--site={site}", "--max-mb=0", f"--lite={s['lite']}", f"--crop={s['crop']}", f"--eye-height={s['eyeHeight']}"], rep)
+         f"--site={site}", f"--max-mb={s.get('maxMb', 19)}", f"--lite={s['lite']}", f"--crop={s['crop']}", f"--eye-height={s['eyeHeight']}"], rep)
     rep.check()
 
     # 4. publish: tour.json last, so the tour only changes once its files are in place
