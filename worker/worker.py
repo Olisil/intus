@@ -156,9 +156,14 @@ def run(argv: list[str], rep: Reporter, cwd: Path | None = None, total: int | No
 # ------------------------------------------------------------------ recipe
 
 def fill(template: list, v: dict) -> list[str]:
-    """{name} is replaced; an item '{?flag:text}' is kept only when v[flag] is true (or non-empty)."""
+    """{name} is replaced; an item '{?flag:text}' is kept only when v[flag] is true (or non-empty);
+    an item '{@name}' becomes the list v[name] (several arguments, or none)."""
     out = []
     for item in template:
+        m = re.fullmatch(r"\{@(\w+)\}", item)
+        if m:
+            out.extend(str(x) for x in v.get(m.group(1), []))
+            continue
         m = re.fullmatch(r"\{\?(\w+):(.*)\}", item)
         if m:
             if not v.get(m.group(1)):
@@ -270,7 +275,21 @@ def process(job: dict, rep: Reporter) -> dict:
         for p in photos:
             shutil.copy2(p, dataset / "images" / "photos" / p.name.split("-", 1)[1])
 
+    def video_rigs() -> list[str]:
+        """The two lenses of each 360 video are one rig, taken in order, with fisheye lenses."""
+        args = []
+        for i in range(1, len(videos) + 1):
+            stem = dataset / "images" / f"v{i}"
+            cams = sorted(d.name for d in stem.iterdir() if d.is_dir()) if stem.exists() else []
+            if cams[:2] == ["cam0", "cam1"]:
+                args += ["--rig", f"dual-fisheye=v{i}/cam0,v{i}/cam1", "--sequence", f"v{i}/cam0,v{i}/cam1", "--camera-model", f"v{i}=thin-prism-fisheye"]
+            elif cams:
+                args += ["--sequence", ",".join(f"v{i}/{c}" for c in cams)]
+        return args
+
+    base["hasVideo"] = bool(videos)
     for st in recipe["steps"]:
+        base["videoRigs"] = video_rigs()
         when = st.get("when")
         if when and not base.get(when):
             continue

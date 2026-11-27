@@ -4,37 +4,99 @@
     "The Spirula command lines the worker runs for this version, mirroring the settings that gave the best Hemma dataset in Spirula Studio:",
     "synchronized lenses, adaptive frame rate, blurry frames skipped, people masked with SAM 2.1 Base+ and Grounding DINO Tiny, depth and normals, then training.",
     "{name} is filled in by worker.py; an item {?flag:text} is only used when that setting is on.",
-    "A new Spirula version gets its own copy of this file; check the flags against `spirula <tool> --help` of that version."
+    "A new Spirula version gets its own copy of this file; check the flags against `spirula <tool> --help` of that version.",
+    "Checked against `spirula <tool> --help` of the v2026.11.12 Linux build. {@name} expands to several arguments: videoRigs = for each dual-fisheye video, --rig dual-fisheye=vN/cam0,vN/cam1, --sequence vN/cam0,vN/cam1 and --camera-model vN=thin-prism-fisheye."
   ],
   "steps": [
     {
       "step": "frames",
       "for_each": "video",
-      "argv": ["{spirula}", "sam", "extract", "{input}", "-o", "{images}/{stem}", "--sync", "--skip", "{skip}",
-               "{?adaptive:--adaptive}", "{?skipBlurry:--blur-reject}", "{?skipBlurry:8}",
-               "{?start:--start}", "{?start:{start}}", "{?end:--end}", "{?end:{end}}"]
+      "argv": [
+        "{spirula}",
+        "sam",
+        "extract",
+        "{input}",
+        "-o",
+        "{images}/{stem}",
+        "--sync",
+        "--skip",
+        "{skip}",
+        "{?adaptive:--adaptive}",
+        "{?skipBlurry:--blur-reject}",
+        "{?skipBlurry:8}",
+        "{?start:--start}",
+        "{?start:{start}}",
+        "{?end:--end}",
+        "{?end:{end}}"
+      ]
     },
     {
       "step": "masks",
       "when": "removePeople",
       "for_each": "image_dir",
-      "argv": ["{spirula}", "sam", "track", "--model", "{models}/sam2.1_hiera_base_plus_f16.ggml", "--detector", "gdino-tiny",
-               "--frames", "{dir}", "--out", "{masks}/{rel}", "--text", "{removeText}"]
+      "argv": [
+        "{spirula}",
+        "sam",
+        "track",
+        "--model",
+        "{models}/sam2.1_hiera_base_plus_f16.ggml",
+        "--detector",
+        "gdino-tiny",
+        "--frames",
+        "{dir}",
+        "--out",
+        "{masks}/{rel}",
+        "--text",
+        "{removeText}"
+      ]
     },
     {
       "step": "cameras",
-      "argv": ["{spirula}", "sfm", "auto", "{dataset}"]
+      "argv": [
+        "{spirula}",
+        "sfm",
+        "auto",
+        "{dataset}",
+        "-o",
+        "{dataset}",
+        "--quality",
+        "high",
+        "{?hasVideo:--data-type}",
+        "{?hasVideo:video}",
+        "{@videoRigs}"
+      ]
     },
     {
       "step": "depth",
       "when": "depth",
-      "argv": ["{spirula}", "geometry", "{dataset}"]
+      "argv": [
+        "{spirula}",
+        "geometry",
+        "{dataset}"
+      ]
     },
     {
       "step": "training",
-      "argv": ["{spirula}", "train", "--data", "{dataset}", "--cap-max", "{splats}", "--num-iterations", "{steps}",
-               "--floater-suppression", "{floaters}", "--output-dir-prefix", "{outputs}", "--output-dir-name", "run",
-               "--disable-viewer", "true", "--keep-viewer-alive", "false"]
+      "argv": [
+        "{spirula}",
+        "train",
+        "--data",
+        "{dataset}",
+        "--cap-max",
+        "{splats}",
+        "--num-iterations",
+        "{steps}",
+        "--floater-suppression",
+        "{floaters}",
+        "--output-dir-prefix",
+        "{outputs}",
+        "--output-dir-name",
+        "run",
+        "--disable-viewer",
+        "1",
+        "--keep-viewer-alive",
+        "0"
+      ]
     }
   ]
 }

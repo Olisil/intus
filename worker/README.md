@@ -39,7 +39,7 @@ docker run --gpus all -e INTUS_WORKER_KEY=… -v /scratch:/work ghcr.io/olisil/i
    People keep the versions they were given; old ones can be retired.
 
 ## First run of v2026.11.12 — to check
-The recipe was written from Spirula's command-line help and has only been run against a stand-in, not a real GPU yet.
+The recipe's flags are checked against the v2026.11.12 Linux build's `--help`, but it has not run on a GPU yet.
 Check on the first real job (the log is visible in Intus admin):
 - `sam extract --sync` on an .OSV puts each lens in its own folder under `images/v1/`.
 - `sam track` finds the cached SAM 2.1 / Grounding DINO weights, and the masks land beside `images/` with matching names.

@@ -16,7 +16,7 @@ ENV SPIRULA_VERSION=${SPIRULA_VERSION} \
 # Vulkan loader, the libraries the Spirula binary links (GL/X/Wayland for its window, unused here), ffmpeg, Python, Node.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl unzip ffmpeg python3 python3-pip \
-      libvulkan1 libgl1 libegl1 libx11-6 libxrandr2 libxinerama1 libxcursor1 libxi6 libxext6 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
+      libvulkan1 libopengl0 libgomp1 libgl1 libegl1 libx11-6 libxrandr2 libxinerama1 libxcursor1 libxi6 libxext6 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
