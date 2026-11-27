@@ -315,6 +315,36 @@ def upload_output(job: dict, path: Path, rep: Reporter):
     api("POST", "output-complete", json={"job": job["id"], "worker": NAME, "name": name, "upload": up, "parts": parts}).raise_for_status()
 
 
+def ensure_vulkan(rep: Reporter):
+    """Spirula runs on Vulkan through the NVIDIA driver. Some GPU machines mount the driver's Vulkan library
+    somewhere other than the image expects; find it and point the loader at it. Stops the job with a clear
+    message when the machine has no Vulkan at all."""
+    def works() -> tuple[bool, str]:
+        r = subprocess.run([SPIRULA, "sam", "devices"], capture_output=True, text=True, timeout=120, errors="replace")
+        return r.returncode == 0, (r.stdout + r.stderr).strip()
+    ok, out = works()
+    if ok:
+        rep.log("GPU: " + " | ".join(l.strip() for l in out.splitlines() if l.strip())[:300])
+        return
+    rep.log(f"Vulkan did not start ({out.splitlines()[-1] if out else 'no output'}); looking for the NVIDIA Vulkan driver")
+    caps = os.environ.get("NVIDIA_DRIVER_CAPABILITIES", "(unset)")
+    found = []
+    for root in ("/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib", "/usr/local/nvidia/lib64", "/usr/local/nvidia/lib", "/lib/x86_64-linux-gnu"):
+        if os.path.isdir(root):
+            found += sorted(str(p) for p in Path(root).glob("libGLX_nvidia.so*"))
+    rep.log(f"  NVIDIA_DRIVER_CAPABILITIES={caps}; driver Vulkan libraries: {found or 'none'}")
+    for lib in found:
+        icd = Path("/tmp/nvidia_icd.json")
+        icd.write_text(json.dumps({"file_format_version": "1.0.0", "ICD": {"library_path": lib, "api_version": "1.3"}}))
+        os.environ["VK_ICD_FILENAMES"] = os.environ["VK_DRIVER_FILES"] = str(icd)
+        ok, out = works()
+        if ok:
+            rep.log(f"  Vulkan works with {lib}")
+            return
+    raise RuntimeError("This GPU machine has no working Vulkan driver (the cloud gave a machine without graphics libraries). "
+                       "Start the processing again; it usually lands on another machine.")
+
+
 def send_preview(job: dict, step: str, make, rep: Reporter):
     """Makes and sends one preview picture. Never stops the job."""
     try:
@@ -376,6 +406,7 @@ def process(job: dict, rep: Reporter) -> dict:
 
     # 1. the uploaded files
     rep.set("frames")
+    ensure_vulkan(rep)
     files = []
     for f in job["inputs"]:
         dest = inputs / f"{f['id']}-{re.sub(r'[^A-Za-z0-9._-]', '_', f['name'])}"
