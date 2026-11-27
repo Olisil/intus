@@ -429,28 +429,40 @@ def segment_hits(V, T, p, q):
     return bool(np.any(ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (tt >= 0) & (tt <= 1)))
 
 
-def free_start(pos, path, V, T, radius=0.3):
-    """A start point you can actually stand on and walk away from: nothing between it and the nearest walked
-    position on that floor, and room for the body around it. Otherwise the nearest spot towards the walk
-    that is free; the walked position itself always is."""
+def free_start(pos, path, V, T, radius=0.35):
+    """A start point you can stand on and walk away from: room for the body around it, and a clear line to a
+    walked position that itself has room (the camera is sometimes held out over a counter, so not every
+    walked position does). Otherwise the nearest such spot. Returns (position, moved?)."""
     pos = np.asarray(pos, float)
     path = np.asarray(path, float)
     same = path[np.abs(path[:, 1] - pos[1]) < 0.3]
     if not len(same):
         same = path
-    anchor = same[np.argmin(np.hypot(same[:, 0] - pos[0], same[:, 2] - pos[2]))]
     up_ = lambda p, h: np.array([p[0], p[1] + h, p[2]])
     ring = [np.array([math.cos(k * math.pi / 4), 0, math.sin(k * math.pi / 4)]) * radius for k in range(8)]
+    heights = (0.35, 0.9, 1.4)   # above what you can step over, below the ceiling
+    memo = {}
 
-    def free(p):
-        if any(segment_hits(V, T, up_(anchor, h), up_(p, h)) for h in (0.5, 1.0, 1.4)):
-            return False
-        return not any(segment_hits(V, T, up_(p, h), up_(p, h) + r) for h in (0.6, 1.3) for r in ring)
-    for f in (0.0, 0.25, 0.5, 0.75, 0.9):
-        cand = pos + (anchor - pos) * f
-        if free(cand):
-            return [round(float(cand[0]), 3), round(float(pos[1]), 3), round(float(cand[2]), 3)], f > 0
-    return [round(float(anchor[0]), 3), round(float(anchor[1]), 3), round(float(anchor[2]), 3)], True
+    def clear(p):
+        key = (round(float(p[0]), 3), round(float(p[1]), 3), round(float(p[2]), 3))
+        if key not in memo:
+            memo[key] = not any(segment_hits(V, T, up_(p, h), up_(p, h) + r) for h in heights for r in ring)
+        return memo[key]
+
+    def sight(p, q):
+        return not any(segment_hits(V, T, up_(p, h), up_(q, h)) for h in heights)
+    near = same[np.argsort(np.hypot(same[:, 0] - pos[0], same[:, 2] - pos[2]))]
+    anchors = [q for q in near[:40] if np.hypot(q[0] - pos[0], q[2] - pos[2]) < 4.0 and clear(q)][:8]
+    done = lambda p: ([round(float(p[0]), 3), round(float(pos[1]), 3), round(float(p[2]), 3)], bool(np.hypot(p[0] - pos[0], p[2] - pos[2]) > 0.01))
+    if clear(pos) and any(sight(q, pos) for q in anchors):
+        return done(pos)
+    for q in anchors:                      # as close to the wanted spot as there is room, towards the walk
+        for f in (0.25, 0.5, 0.75):
+            cand = pos + (q - pos) * f
+            if clear(cand) and sight(q, cand):
+                return done(cand)
+        return done(q)
+    return done(near[0])
 
 
 # --------------------------------------------------------------------- splat-transform
