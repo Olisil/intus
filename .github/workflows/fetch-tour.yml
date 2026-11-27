@@ -17,13 +17,22 @@ on:
         description: Also push the files to this throwaway branch (optional)
         required: false
         default: ''
+      delete_branch:
+        description: Only delete the throwaway branch named above (when done testing)
+        type: boolean
+        default: false
 permissions:
   contents: write
 jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
+      - name: Delete the throwaway branch
+        if: inputs.delete_branch && inputs.branch != '' && inputs.branch != 'main'
+        run: git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" --delete "${{ inputs.branch }}"
+        working-directory: /tmp
       - name: Download
+        if: ${{ !inputs.delete_branch }}
         run: |
           for t in ${{ inputs.tours }}; do
             mkdir -p "tours/$t"
@@ -42,12 +51,13 @@ jobs:
             ls -la "tours/$t"
           done
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.delete_branch }}
         with:
           name: tours
           path: tours
           retention-days: 3
       - name: Push to a throwaway branch
-        if: inputs.branch != ''
+        if: ${{ inputs.branch != '' && !inputs.delete_branch }}
         run: |
           cd tours && git init -q -b "${{ inputs.branch }}" && git add -A
           git -c user.name=tour-fetch -c user.email=tour-fetch@users.noreply.github.com commit -q -m "Published tour files for testing"
