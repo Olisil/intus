@@ -1,0 +1,41 @@
+# Fetches the published files of one or more tours from the tour store, as an artifact.
+# For looking into a tour that will not open: the files can then be run in a local test browser.
+name: Fetch published tour
+on:
+  workflow_dispatch:
+    inputs:
+      tours:
+        description: Tour link names, space separated
+        required: true
+        default: hemma
+      base:
+        description: Public address of the tour store
+        required: true
+        default: https://pub-3e4122c4b21f4bbda45a2627f41fe31d.r2.dev
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download
+        run: |
+          for t in ${{ inputs.tours }}; do
+            mkdir -p "tours/$t"
+            curl -fsS "${{ inputs.base }}/$t/tour.json" -o "tours/$t/tour.json"
+            for f in $(python3 -c "
+          import json,sys
+          j=json.load(open('tours/$t/tour.json'))
+          out=set()
+          def walk(v):
+              if isinstance(v,str) and '.' in v and '/' not in v and v.rsplit('.',1)[1] in ('sog','glb','webp','png','jpg','json','ply','spz'): out.add(v)
+              elif isinstance(v,dict): [walk(x) for x in v.values()]
+              elif isinstance(v,list): [walk(x) for x in v]
+          walk(j); out.discard('tour.json'); print(' '.join(sorted(out)))"); do
+              curl -fsS "${{ inputs.base }}/$t/$f" -o "tours/$t/$f" || echo "missing $t/$f"
+            done
+            ls -la "tours/$t"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tours
+          path: tours
+          retention-days: 3
