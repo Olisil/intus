@@ -231,6 +231,25 @@ def flatten_lenses(images: Path, n_videos: int, rep: "Reporter"):
             rep.log(f"  ! left in {stem.name}: {[x.name for x in stem.iterdir()][:5]}")
 
 
+def name_masks(images: Path, masks: Path, rep: "Reporter"):
+    """`sam track` numbers its masks (frame_00000.png …) in the order it read the frames (sorted by name);
+    the reconstruction and training look for <frame name>.png. Renames them to match."""
+    for d in image_dirs(images):
+        md = masks / d.relative_to(images)
+        numbered = sorted((f for f in md.glob("frame_*.png") if re.fullmatch(r"frame_\d+\.png", f.name)),
+                          key=lambda f: int(f.stem.split("_")[1])) if md.is_dir() else []
+        if not numbered:
+            continue
+        frames = sorted(f for f in d.iterdir() if f.is_file() and PHOTO.search(f.name))
+        if len(numbered) != len(frames):
+            rep.log(f"  ! {md.name}: {len(numbered)} masks for {len(frames)} frames; left as they are")
+            continue
+        tmp = [f.rename(f.with_name(f"_{f.name}")) for f in numbered]  # two passes: a new name may be an old one
+        for f, img in zip(tmp, frames):
+            f.rename(md / f"{img.stem}.png")
+        rep.log(f"  {md.name}: {len(frames)} masks named after their frames")
+
+
 def separate_masks(images: Path, masks: Path, rep: "Reporter"):
     """If masks landed next to the frames (frame_1.jpg + frame_1.png), move them to masks/<lens>/,
     or the reconstruction would take them for photos."""
@@ -422,6 +441,7 @@ def process(job: dict, rep: Reporter) -> dict:
             flatten_lenses(dataset / "images", len(videos), rep)
         if st["step"] == "masks":
             separate_masks(dataset / "images", dataset / "masks", rep)
+            name_masks(dataset / "images", dataset / "masks", rep)
         if st["step"] in ("frames", "masks"):
             for line in summary(dataset / "images") + (summary(dataset / "masks") if st["step"] == "masks" else []):
                 rep.log(line)

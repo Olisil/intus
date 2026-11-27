@@ -8,7 +8,8 @@
     "A new Spirula version gets its own copy of this file; check the flags against `spirula <tool> --help` of that version.",
     "licences: Spirula asks before it loads SAM 2.1, Grounding DINO, RoMa v2 (with Meta's DINOv3 licence) and FlexGlue. Nassau accepted these for the service on 2026-11-27; the cloud has no window to click Accept in, so every step passes --accept-license.",
     "--eval-lpips 0: the quality score after training would download ~800 MB of extra weights on every run; the tour does not use it.",
-    "Laid out and reconstructed as Spirula Studio does for a 360 video (see a Studio dataset's logs/prep_*.log): images/cam0 and images/cam1 with masks/cam0 and masks/cam1 beside them, `sfm auto <images> -o <dataset>` (input is the images folder, so masks are not taken for photos), --rig dual-fisheye=cam0,cam1, --camera-model thin-prism-fisheye, capture type individual (Studio's default)."
+    "Laid out and reconstructed as Spirula Studio does for a 360 video (see a Studio dataset's logs/prep_*.log): images/cam0 and images/cam1 with masks/cam0 and masks/cam1 beside them, `sfm auto <images> -o <dataset>` (input is the images folder, so masks are not taken for photos), --rig dual-fisheye=cam0,cam1, --camera-model thin-prism-fisheye, capture type individual (Studio's default).",
+    "After the people masks, `sam mask <images>` adds each 360 lens's dark border (Studio: 'cam0: border found -- 77% of the frame is kept'); it intersects with the masks already there. sam track numbers its masks; worker.py renames them to <frame>.png first."
   ],
   "steps": [
     {
@@ -51,6 +52,18 @@
         "{masks}/{rel}",
         "--text",
         "{removeText}",
+        "{?licences:--accept-license}",
+        "{?licences:{licences}}"
+      ]
+    },
+    {
+      "step": "masks",
+      "when": "hasVideo",
+      "argv": [
+        "{spirula}",
+        "sam",
+        "mask",
+        "{images}",
         "{?licences:--accept-license}",
         "{?licences:{licences}}"
       ]
