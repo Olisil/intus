@@ -118,6 +118,9 @@ PLY_TYPES = {"float": "f4", "float32": "f4", "double": "f8", "float64": "f8", "u
              "int": "i4", "int32": "i4", "uint": "u4", "uint32": "u4"}
 
 
+LITE_MAX = 450_000  # splats in the light version at most
+
+
 def read_ply(path: Path):
     with open(path, "rb") as f:
         header = b""
@@ -585,10 +588,15 @@ def main():
             mb = (out / "tour.sog").stat().st_size / 1e6
             log(f"  tour.sog is now {mb:.1f} MB")
         lite = out / "tour-lite.sog"
-        if a.lite and 0 < a.lite < pct:
-            log(f"Light version ({a.lite:g}% of the splats, for phones and slower computers)")
+        # --lite is a share of the published tour (after the size limit thinned it), not of the trained splat,
+        # and a phone gets at most LITE_MAX splats: a 3M-splat training once gave a 900k light version that
+        # phones could not draw.
+        n_all = int(np.count_nonzero(keep)) if getattr(keep, "dtype", None) == bool else len(keep)
+        lite_pct = min(a.lite * pct / 100, 100.0 * LITE_MAX / max(1, n_all)) if a.lite else 0
+        if a.lite and 0 < a.lite < 100:
+            log(f"Light version ({a.lite:g}% of the tour's splats, at most {LITE_MAX:,}; {lite_pct:.0f}% of the trained ones, for phones and slower computers)")
             thin = work / "lite.ply"
-            run_gpu([aligned, "-d", f"{a.lite:g}%", thin], "thin")
+            run_gpu([aligned, "-d", f"{max(1, round(lite_pct))}%", thin], "thin")
             to_sog(thin, "light SOG", lite, ["-H", "1"])
             files["splatLite"] = lite.name
         elif lite.exists():
