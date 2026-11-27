@@ -39,8 +39,9 @@ RUN M=/opt/cache/spirula-studio/models && mkdir -p $M && cd $M \
 RUN cd /opt/cache/spirula-studio/models \
     && curl -fsSL -o romav2.0.1.pt https://github.com/Parskatt/RoMaV2/releases/download/v2.0.1/romav2.0.1.pt
 
-# splat-transform for SOG compression and the collision mesh (publish_tour.py prefers an installed one)
-RUN npm install -g @playcanvas/splat-transform@3
+# splat-transform for SOG compression and the collision mesh (publish_tour.py prefers an installed one).
+# Pinned to the version whose SOG files the viewer's engine reads (format version 2); see tools/publish_tour.py.
+RUN npm install -g @playcanvas/splat-transform@3.10.3
 
 COPY tools /opt/intus/tools
 COPY worker /opt/intus/worker

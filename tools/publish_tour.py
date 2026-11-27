@@ -42,7 +42,11 @@ from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
 HERE = Path(__file__).resolve().parent
-SPLAT_TRANSFORM_PKG = "@playcanvas/splat-transform@3"
+# Pinned: the viewer's PlayCanvas engine (public/lib/playcanvas.mjs, 2.23) reads SOG format version 2.
+# splat-transform 3.12 writes version 3, which that engine draws wrongly; a 1.2M-splat tour froze the whole
+# computer. Move this only together with the engine in the viewer, and test a published tour before and after.
+SPLAT_TRANSFORM_PKG = "@playcanvas/splat-transform@3.10.3"
+SOG_VERSION = 2  # what the viewer reads
 
 
 def log(msg: str) -> None:
@@ -573,7 +577,14 @@ def main():
             sys.exit(1)
 
         def to_sog(src, desc, dst=None, extra=()):
-            run_gpu([src, *extra, dst or out / "tour.sog"], desc)
+            dst = dst or out / "tour.sog"
+            run_gpu([src, *extra, dst], desc)
+            import zipfile
+            ver = json.loads(zipfile.ZipFile(dst).read("meta.json")).get("version")
+            if ver != SOG_VERSION:
+                dst.unlink()
+                sys.exit(f"{dst.name} was written as SOG version {ver}; the viewer reads version {SOG_VERSION}. "
+                         f"Nothing was published. Use {SPLAT_TRANSFORM_PKG} (a newer splat-transform is installed).")
         to_sog(aligned, "SOG")
         mb = (out / "tour.sog").stat().st_size / 1e6
         pct = 100.0
