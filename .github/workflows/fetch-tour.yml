@@ -29,8 +29,9 @@ jobs:
     steps:
       - name: Delete the throwaway branch
         if: inputs.delete_branch && inputs.branch != '' && inputs.branch != 'main'
-        run: git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" --delete "${{ inputs.branch }}"
-        working-directory: /tmp
+        run: |
+          git init -q empty && cd empty
+          git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" --delete "${{ inputs.branch }}"
       - name: Download
         if: ${{ !inputs.delete_branch }}
         run: |
