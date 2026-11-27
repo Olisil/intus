@@ -1,5 +1,6 @@
 # Fetches the published files of one or more tours from the tour store, as an artifact.
 # For looking into a tour that will not open: the files can then be run in a local test browser.
+# With branch set, the files are also pushed to that (throwaway) branch; delete it afterwards.
 name: Fetch published tour
 on:
   workflow_dispatch:
@@ -12,6 +13,12 @@ on:
         description: Public address of the tour store
         required: true
         default: https://pub-3e4122c4b21f4bbda45a2627f41fe31d.r2.dev
+      branch:
+        description: Also push the files to this throwaway branch (optional)
+        required: false
+        default: ''
+permissions:
+  contents: write
 jobs:
   fetch:
     runs-on: ubuntu-latest
@@ -39,3 +46,9 @@ jobs:
           name: tours
           path: tours
           retention-days: 3
+      - name: Push to a throwaway branch
+        if: inputs.branch != ''
+        run: |
+          cd tours && git init -q -b "${{ inputs.branch }}" && git add -A
+          git -c user.name=tour-fetch -c user.email=tour-fetch@users.noreply.github.com commit -q -m "Published tour files for testing"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "${{ inputs.branch }}"
