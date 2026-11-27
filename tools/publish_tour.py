@@ -322,6 +322,137 @@ def euler_for(R):
     raise RuntimeError("could not express rotation as PlayCanvas Euler angles")
 
 
+# --------------------------------------------------------------------- keeping hand edits across reconstructions
+# Each reconstruction of the same walk gets its own tour frame (origin and heading come from its first
+# frames), a few degrees and decimetres off the last one. Rooms and start points drawn in the old frame
+# must be moved, or a start lands inside a wall.
+
+def _dense(p, step=0.05):
+    p = np.asarray(p, float)
+    out = []
+    for a_, b_ in zip(p[:-1], p[1:]):
+        n = max(1, int(np.linalg.norm(b_ - a_) / step))
+        out += [a_ + (b_ - a_) * t for t in np.linspace(0, 1, n, endpoint=False)]
+    return np.array(out + [p[-1]])
+
+
+def fit_frames(old_path, new_path):
+    """Rigid move in the floor plane (turn about Y + shift) that lays the old walked path on the new one.
+    Returns (M 2x2, t 2, median distance in metres) acting on (x, z), or None."""
+    if not old_path or not new_path or len(old_path) < 10 or len(new_path) < 10:
+        return None
+    A, B = _dense(old_path), _dense(new_path)
+    # match in the floor plane; heights only keep the storeys apart (floor heights differ a little between
+    # reconstructions, so they count for less)
+    W = 0.3
+    tree = cKDTree(np.c_[B[:, [0, 2]], B[:, 1] * W])
+    M, t = np.eye(2), np.zeros(2)
+    for _ in range(60):
+        X = A[:, [0, 2]] @ M.T + t
+        d, i = tree.query(np.c_[X, A[:, 1] * W])
+        ok = d <= np.percentile(d, 90)
+        P, Q = A[ok][:, [0, 2]], B[i[ok]][:, [0, 2]]
+        cp, cq = P.mean(0), Q.mean(0)
+        U, _, Vt = np.linalg.svd((P - cp).T @ (Q - cq))
+        D = np.diag([1, np.sign(np.linalg.det(Vt.T @ U.T))])
+        M = Vt.T @ D @ U.T
+        t = cq - M @ cp
+    X = A[:, [0, 2]] @ M.T + t
+    _, i = tree.query(np.c_[X, A[:, 1] * W])
+    return M, t, float(np.median(np.hypot(*(X - B[i][:, [0, 2]]).T)))
+
+
+def move_start(st, M, t):
+    """A {position, yaw} start point moved into the new frame (height is set from the storey later)."""
+    if not st or "position" not in st:
+        return st
+    x, y, z = st["position"]
+    nx, nz = M @ [x, z] + t
+    yaw = math.radians(st.get("yaw") or 0)
+    dx, dz = M @ [-math.sin(yaw), -math.cos(yaw)]
+    return {**st, "position": [round(float(nx), 3), y, round(float(nz), 3)], "yaw": round(math.degrees(math.atan2(-dx, -dz)), 1)}
+
+
+def move_map(old_map, M, t):
+    """A hand-edited map moved into the new frame. Room rectangles live in plan coordinates (the tour's x, z
+    turned by map.angle), so the turn goes into the angle and the rectangles only shift."""
+    theta = math.atan2(M[1, 0], M[0, 0])
+    a2 = old_map.get("angle", 0.0) - theta
+    c, s_ = math.cos(a2), math.sin(a2)
+    cu, cv = c * t[0] - s_ * t[1], s_ * t[0] + c * t[1]
+    m = json.loads(json.dumps(old_map))
+    m["angle"] = round(a2, 5)
+    for r in m.get("rooms", []):
+        r["rects"] = [[round(u0 + cu, 3), round(v0 + cv, 3), round(u1 + cu, 3), round(v1 + cv, 3)] for u0, v0, u1, v1 in r.get("rects", [])]
+        if r.get("start"):
+            r["start"] = move_start(r["start"], M, t)
+    return m
+
+
+def match_storeys(plan, old_levels, pics, log=print):
+    """After hand-drawn rooms were carried over: point them at the new storeys (nearest height), keep only
+    the storeys they use (the drawn map decides which storeys exist) and stand each start on its floor."""
+    new_y = [l["y"] for l in plan["levels"]]
+    near = lambda y: int(np.argmin([abs(v - y) for v in new_y]))
+    old_y = [l.get("y", 0) for l in old_levels]
+    to_new = {i: near(y) for i, y in enumerate(old_y)}
+    used = sorted({to_new.get(r.get(k), 0) for r in plan["rooms"] for k in ("level", "top") if k in r})
+    for i, l in enumerate(plan["levels"]):
+        if i not in used:
+            log(f"  storey at {l['y']:+.2f} m left out: no drawn room is on it")
+            pics.pop(l.get("image"), None)
+    idx = {old: new for new, old in enumerate(used)}
+    plan["levels"] = [plan["levels"][i] for i in used]
+    for r in plan["rooms"]:
+        for k in ("level", "top"):
+            if k in r:
+                r[k] = idx[to_new.get(r[k], 0)]
+        if r.get("start", {}).get("position"):
+            r["start"]["position"][1] = plan["levels"][r["level"]]["y"]
+    return plan
+
+
+def segment_hits(V, T, p, q):
+    """Does the segment p-q cross any triangle of the collision mesh (Moller-Trumbore, all at once)?"""
+    V = np.asarray(V, float).reshape(-1, 3); T = np.asarray(T).reshape(-1, 3)
+    d = np.asarray(q, float) - np.asarray(p, float)
+    v0, e1, e2 = V[T[:, 0]], V[T[:, 1]] - V[T[:, 0]], V[T[:, 2]] - V[T[:, 0]]
+    h = np.cross(d, e2)
+    det = np.einsum("ij,ij->i", e1, h)
+    ok = np.abs(det) > 1e-12
+    inv = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+    s_ = np.asarray(p, float) - v0
+    u = np.einsum("ij,ij->i", s_, h) * inv
+    qv = np.cross(s_, e1)
+    v = (qv @ d) * inv
+    tt = np.einsum("ij,ij->i", e2, qv) * inv
+    return bool(np.any(ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (tt >= 0) & (tt <= 1)))
+
+
+def free_start(pos, path, V, T, radius=0.3):
+    """A start point you can actually stand on and walk away from: nothing between it and the nearest walked
+    position on that floor, and room for the body around it. Otherwise the nearest spot towards the walk
+    that is free; the walked position itself always is."""
+    pos = np.asarray(pos, float)
+    path = np.asarray(path, float)
+    same = path[np.abs(path[:, 1] - pos[1]) < 0.3]
+    if not len(same):
+        same = path
+    anchor = same[np.argmin(np.hypot(same[:, 0] - pos[0], same[:, 2] - pos[2]))]
+    up_ = lambda p, h: np.array([p[0], p[1] + h, p[2]])
+    ring = [np.array([math.cos(k * math.pi / 4), 0, math.sin(k * math.pi / 4)]) * radius for k in range(8)]
+
+    def free(p):
+        if any(segment_hits(V, T, up_(anchor, h), up_(p, h)) for h in (0.5, 1.0, 1.4)):
+            return False
+        return not any(segment_hits(V, T, up_(p, h), up_(p, h) + r) for h in (0.6, 1.3) for r in ring)
+    for f in (0.0, 0.25, 0.5, 0.75, 0.9):
+        cand = pos + (anchor - pos) * f
+        if free(cand):
+            return [round(float(cand[0]), 3), round(float(pos[1]), 3), round(float(cand[2]), 3)], f > 0
+    return [round(float(anchor[0]), 3), round(float(anchor[1]), 3), round(float(anchor[2]), 3)], True
+
+
 # --------------------------------------------------------------------- splat-transform
 def splat_transform_cmd():
     exe = shutil.which("splat-transform")
@@ -624,10 +755,33 @@ def main():
         V, T = col.build(xyz_t, opacity[k2], sc, q_t, feet_t, log=lambda m: log(m))
         col.write_glb(out / "collision.glb", V, T)
         files["collision"] = "collision.glb"
+        mesh = (V, T)
     else:
+        mesh = None
         files["collision"] = "collision.glb" if (out / "collision.glb").exists() else None
 
     prev = json.loads((out / "tour.json").read_text(encoding="utf-8")) if (out / "tour.json").exists() else {}
+    tour_path, last = [], None
+    for f in to_tour(feet_w):
+        if last is None or np.linalg.norm(f - last) > 0.5:
+            tour_path.append([round(float(v), 3) for v in f]); last = f
+    # an earlier version of this tour: lay its frame on this one before keeping what was drawn by hand
+    fit, moved = None, False
+    if prev.get("path") and (prev.get("map") or prev.get("spawn")):
+        fit = fit_frames(prev["path"], tour_path)
+        if fit and fit[2] <= 0.35:
+            M_, t_, err = fit
+            turn = math.degrees(math.atan2(M_[1, 0], M_[0, 0]))
+            moved = abs(turn) > 0.3 or np.hypot(*t_) > 0.05
+            log(f"Earlier tour  its walk matches this one to {err * 100:.0f} cm" + (f"; rooms and start points moved {np.hypot(*t_):.2f} m and turned {turn:+.1f}°" if moved else ""))
+            if moved:
+                if prev.get("map"):
+                    prev["map"] = move_map(prev["map"], M_, t_)
+                if prev.get("spawn"):
+                    prev["spawn"] = move_start(prev["spawn"], M_, t_)
+        else:
+            log("Earlier tour  its walk does not match this one" + (f" ({fit[2]:.2f} m apart)" if fit else "") + "; rooms and start points are made new")
+            prev.pop("map", None); prev.pop("spawn", None)
     plan = prev.get("map") if a.no_map else None
     if not a.no_map:
         log("Floor plan (storeys, rooms, plan pictures)")
@@ -638,6 +792,8 @@ def main():
             dc = np.stack([data["f_dc_0"], data["f_dc_1"], data["f_dc_2"]], 1)[k2].astype(np.float64) if "f_dc_0" in data.dtype.names else None
             plan, pics = rooms.build_map(xyz_t, opacity[k2], sc, q_t, feet_t, dc, lang=a.lang, angle=angle, log=log)
             plan = rooms.carry_over(plan, old_map)
+            if old_map and old_map.get("edited") and plan.get("rooms") is old_map.get("rooms"):
+                plan = match_storeys(plan, old_map.get("levels") or [], pics, log=log)
             for old_pic in out.glob("plan-*.*"):
                 old_pic.unlink()
             for n, b in pics.items():
@@ -647,10 +803,6 @@ def main():
             plan = prev.get("map")
 
     # ---- 8. tour.json
-    tour_path, last = [], None
-    for f in to_tour(feet_w):
-        if last is None or np.linalg.norm(f - last) > 0.5:
-            tour_path.append([round(float(v), 3) for v in f]); last = f
     bxyz = to_tour(xyz[keep][:: max(1, keep.sum() // 200000)])
     tour = {
         "title": a.title or a.name.replace("-", " ").title(),
@@ -675,6 +827,14 @@ def main():
         for k in ("spawn", "eyeHeight", "walkSpeed", "runSpeed", "fov", "background"):
             if k in prev and k not in ("spawn",) or (k == "spawn" and a.spawn == 0 and k in prev):
                 tour[k] = prev[k]
+    # every start point must be a place you can stand and walk away from
+    if mesh is not None:
+        starts = [("start", tour["spawn"])] + [(r.get("name") or r.get("id"), r["start"]) for r in (tour.get("map") or {}).get("rooms", []) if r.get("start")]
+        for name, st in starts:
+            pos, changed = free_start(st["position"], tour_path, *mesh)
+            if changed:
+                log(f"  start point '{name}' was inside or behind a wall; moved {np.hypot(pos[0] - st['position'][0], pos[2] - st['position'][2]):.2f} m towards the walk")
+                st["position"] = pos
     old.write_text(json.dumps(tour, indent=2, ensure_ascii=False), encoding="utf-8")
 
     # ---- 9. site: viewer + index
