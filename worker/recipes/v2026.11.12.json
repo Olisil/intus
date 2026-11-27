@@ -1,11 +1,14 @@
 {
   "spirula": "v2026.11.12",
+  "licences": "sam2=yes,gdino=yes,roma=yes,flexglue=yes",
   "notes": [
     "The Spirula command lines the worker runs for this version, mirroring the settings that gave the best Hemma dataset in Spirula Studio:",
     "synchronized lenses, adaptive frame rate, blurry frames skipped, people masked with SAM 2.1 Base+ and Grounding DINO Tiny, depth and normals, then training.",
     "{name} is filled in by worker.py; an item {?flag:text} is only used when that setting is on.",
     "A new Spirula version gets its own copy of this file; check the flags against `spirula <tool> --help` of that version.",
-    "Checked against `spirula <tool> --help` of the v2026.11.12 Linux build. {@name} expands to several arguments: videoRigs = for each dual-fisheye video, --rig dual-fisheye=vN/cam0,vN/cam1, --sequence vN/cam0,vN/cam1 and --camera-model vN=thin-prism-fisheye."
+    "Checked against `spirula <tool> --help` of the v2026.11.12 Linux build. {@name} expands to several arguments: videoRigs = for each dual-fisheye video, --rig dual-fisheye=vN/cam0,vN/cam1, --sequence vN/cam0,vN/cam1 and --camera-model vN=thin-prism-fisheye.",
+    "licences: Spirula asks before it loads SAM 2.1, Grounding DINO, RoMa v2 (with Meta's DINOv3 licence) and FlexGlue. Nassau accepted these for the service on 2026-11-27; the cloud has no window to click Accept in, so every step passes --accept-license.",
+    "--eval-lpips 0: the quality score after training would download ~800 MB of extra weights on every run; the tour does not use it."
   ],
   "steps": [
     {
@@ -47,7 +50,9 @@
         "--out",
         "{masks}/{rel}",
         "--text",
-        "{removeText}"
+        "{removeText}",
+        "{?licences:--accept-license}",
+        "{?licences:{licences}}"
       ]
     },
     {
@@ -63,7 +68,9 @@
         "high",
         "{?hasVideo:--data-type}",
         "{?hasVideo:video}",
-        "{@videoRigs}"
+        "{@videoRigs}",
+        "{?licences:--accept-license}",
+        "{?licences:{licences}}"
       ]
     },
     {
@@ -72,7 +79,9 @@
       "argv": [
         "{spirula}",
         "geometry",
-        "{dataset}"
+        "{dataset}",
+        "{?licences:--accept-license}",
+        "{?licences:{licences}}"
       ]
     },
     {
@@ -95,6 +104,10 @@
         "--disable-viewer",
         "1",
         "--keep-viewer-alive",
+        "0",
+        "{?licences:--accept-license}",
+        "{?licences:{licences}}",
+        "--eval-lpips",
         "0"
       ]
     }

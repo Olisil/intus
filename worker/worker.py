@@ -8,6 +8,10 @@ It talks only to Intus admin (Probe) over HTTPS with the worker key; it never ne
   3. runs the Spirula steps from recipes/<version>.json: frames, masks, cameras, depth, training
   4. runs tools/publish_tour.py (crop, level, SOG, collision, rooms)
   5. uploads the tour files and reports done
+Along the way it sends a preview picture per step (previews.py), shown on the tour page.
+
+A finished splat can be published as it is: upload its splat.ply with the images.bin of its dataset
+(sparse/0) and, when Spirula wrote one, scene_transform.json. Steps 3 is then skipped.
 
 Modes
   python worker.py poll              keep claiming jobs for this image's Spirula version (any machine with a GPU)
@@ -41,8 +45,12 @@ from pathlib import Path
 
 import requests
 
+import previews
+
 HERE = Path(__file__).resolve().parent
 TOOLS = Path(os.environ["INTUS_TOOLS"]) if os.environ.get("INTUS_TOOLS") else HERE.parent / "tools"
+sys.path.insert(0, str(TOOLS))
+import publish_tour as pt  # noqa: E402  (camera and PLY readers for the previews)
 API = os.environ.get("INTUS_API", "https://probe.nassau.se/app/api/intus-worker").rstrip("/")
 KEY = os.environ.get("INTUS_WORKER_KEY", "")
 VERSION = os.environ.get("SPIRULA_VERSION", "")
@@ -53,6 +61,8 @@ NAME = os.environ.get("WORKER_NAME") or f"{socket.gethostname()}-{os.getpid()}"
 WORK = Path(os.environ.get("WORK_DIR", "/work"))
 PART = 32 * 1024 * 1024          # output parts (Probe accepts single files up to 90 MB)
 SINGLE_MAX = 80 * 1024 * 1024
+SPLAT = re.compile(r"\.ply$", re.I)
+CAMERA_FILES = {"images.bin", "images.txt", "cameras.bin", "cameras.txt", "points3D.bin", "points3D.txt", "scene_transform.json"}
 VIDEO = re.compile(r"\.(osv|insv|360|mp4|mov|m4v|mkv|avi|lrv)$", re.I)
 PHOTO = re.compile(r"\.(jpe?g|png|tiff?|heic|dng|webp)$", re.I)
 # Share of the whole job each step stands for, for one progress bar.
@@ -238,6 +248,53 @@ def upload_output(job: dict, path: Path, rep: Reporter):
     api("POST", "output-complete", json={"job": job["id"], "worker": NAME, "name": name, "upload": up, "parts": parts}).raise_for_status()
 
 
+def send_preview(job: dict, step: str, make, rep: Reporter):
+    """Makes and sends one preview picture. Never stops the job."""
+    try:
+        out = make()
+        note = None
+        if isinstance(out, tuple):
+            out, note = out
+        if note:
+            rep.log(f"  {note}")
+        if out:
+            api("PUT", f"preview?job={job['id']}&worker={NAME}&step={step}", data=out,
+                headers={"content-type": "image/jpeg", "content-length": str(len(out))}, timeout=120).raise_for_status()
+    except Exception as e:
+        print(f"  preview {step} skipped: {e}", flush=True)
+
+
+def read_cams(sparse: Path):
+    return pt.read_images_bin(sparse / "images.bin") if (sparse / "images.bin").exists() else pt.read_images_txt(sparse / "images.txt")
+
+
+def find_sparse(dataset: Path) -> Path | None:
+    return next((c for c in (dataset / "sparse" / "0", dataset / "sparse") if (c / "images.bin").exists() or (c / "images.txt").exists()), None)
+
+
+class TrainingPreviews:
+    """While training runs, sends the newest checkpoint seen from above, at most every few minutes."""
+
+    def __init__(self, job: dict, outputs: Path, sparse: Path | None, rep: Reporter, every: float = 180):
+        self.job, self.outputs, self.sparse, self.rep, self.every = job, outputs, sparse, rep, every
+        self.stop = threading.Event()
+        self.last_path, self.last_time = None, 0.0
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        while not self.stop.wait(30):
+            try:
+                plys = [p for p in self.outputs.rglob("splat.ply") if time.time() - p.stat().st_mtime > 15]
+            except Exception:
+                continue
+            if not plys:
+                continue
+            newest = max(plys, key=lambda p: p.stat().st_mtime)
+            if newest != self.last_path and time.time() - self.last_time > self.every:
+                self.last_path, self.last_time = newest, time.time()
+                send_preview(self.job, "training", lambda: previews.splat(newest, self.sparse, read_cams, pt.read_ply, pt.load_scene_transform), self.rep)
+
+
 def process(job: dict, rep: Reporter) -> dict:
     s, tour, q = job["settings"], job["tour"], job["quality"]
     recipe_path = HERE / "recipes" / f"{job['version']}.json"
@@ -258,6 +315,10 @@ def process(job: dict, rep: Reporter) -> dict:
         rep.log(f"Downloading {f['name']} ({f['size'] / 1e9:.2f} GB)")
         download(job, f, dest, rep)
         files.append(dest)
+    original = lambda p: p.name.split("-", 1)[1] if "-" in p.name else p.name
+    splats = [p for p in files if SPLAT.search(p.name)]
+    if splats:
+        return publish(job, rep, files, splats, original, work, site, t0)
     videos = [p for p in files if VIDEO.search(p.name)]
     photos = [p for p in files if PHOTO.search(p.name)]
     if not videos and not photos:
@@ -268,12 +329,14 @@ def process(job: dict, rep: Reporter) -> dict:
         "outputs": str(outputs), "removeText": s["removeText"], "floaters": s["floaters"],
         "splats": str(q["splats"]), "steps": str(q["steps"]), "adaptive": s["adaptive"], "skipBlurry": s["skipBlurry"],
         "start": s.get("start") or "", "end": s.get("end") or "", "depth": s["depth"], "removePeople": s["removePeople"],
+        # model licences accepted for the service (the cloud has no window to click Accept in); see the recipe
+        "licences": recipe.get("licences", ""),
     }
     # Photos go straight into the dataset, one camera folder.
     if photos:
         (dataset / "images" / "photos").mkdir(parents=True, exist_ok=True)
         for p in photos:
-            shutil.copy2(p, dataset / "images" / "photos" / p.name.split("-", 1)[1])
+            shutil.copy2(p, dataset / "images" / "photos" / original(p))
 
     def video_rigs() -> list[str]:
         """The two lenses of each 360 video are one rig, taken in order, with fisheye lenses."""
@@ -294,28 +357,75 @@ def process(job: dict, rep: Reporter) -> dict:
         if when and not base.get(when):
             continue
         rep.set(st["step"], 0.3 if st["step"] == "frames" else 0.0)
-        if st.get("for_each") == "video":
-            for i, v in enumerate(videos):
-                skip = max(1, round(video_fps(v) / max(0.5, float(s["fps"]))))
-                run(fill(st["argv"], {**base, "input": str(v), "stem": f"v{i + 1}", "skip": str(skip)}), rep)
-        elif st.get("for_each") == "image_dir":
-            for d in image_dirs(dataset / "images"):
-                rel = d.relative_to(dataset / "images")
-                (dataset / "masks" / rel).mkdir(parents=True, exist_ok=True)
-                run(fill(st["argv"], {**base, "dir": str(d), "rel": str(rel)}), rep)
-        else:
-            run(fill(st["argv"], base), rep, total=q["steps"] if st["step"] == "training" else None)
+        began = time.time()
+        watcher = TrainingPreviews(job, outputs, find_sparse(dataset), rep) if st["step"] == "training" else None
+        try:
+            run_step(st, base, videos, dataset, s, q, rep)
+        finally:
+            if watcher:
+                watcher.stop.set()
         rep.check()
+        dirs = image_dirs(dataset / "images")
+        if st["step"] == "frames":
+            send_preview(job, "frames", lambda: previews.frames(dirs), rep)
+        elif st["step"] == "masks":
+            send_preview(job, "masks", lambda: previews.masks(dataset / "images", dataset / "masks", dirs), rep)
+        elif st["step"] == "cameras" and find_sparse(dataset):
+            send_preview(job, "cameras", lambda: previews.cameras(find_sparse(dataset), read_cams), rep)
+        elif st["step"] == "depth":
+            send_preview(job, "depth", lambda: previews.depth(dataset, began), rep)
 
     # 2. the trained splat: the newest checkpoint's splat.ply
     plys = sorted(outputs.rglob("splat.ply"), key=lambda p: p.stat().st_mtime)
     if not plys:
         raise RuntimeError("Training finished without a splat.ply")
     splat = plys[-1]
-    sparse = next((c for c in (dataset / "sparse" / "0", dataset / "sparse") if (c / "images.bin").exists() or (c / "images.txt").exists()), None)
+    sparse = find_sparse(dataset)
     if not sparse:
         raise RuntimeError("No camera positions (sparse/0) in the dataset")
+    send_preview(job, "training", lambda: previews.splat(splat, sparse, read_cams, pt.read_ply, pt.load_scene_transform), rep)
+    return build_and_upload(job, rep, splat, sparse, site, t0)
 
+
+def run_step(st: dict, base: dict, videos: list[Path], dataset: Path, s: dict, q: dict, rep: Reporter):
+    if st.get("for_each") == "video":
+        for i, v in enumerate(videos):
+            skip = max(1, round(video_fps(v) / max(0.5, float(s["fps"]))))
+            run(fill(st["argv"], {**base, "input": str(v), "stem": f"v{i + 1}", "skip": str(skip)}), rep)
+    elif st.get("for_each") == "image_dir":
+        for d in image_dirs(dataset / "images"):
+            rel = d.relative_to(dataset / "images")
+            (dataset / "masks" / rel).mkdir(parents=True, exist_ok=True)
+            run(fill(st["argv"], {**base, "dir": str(d), "rel": str(rel)}), rep)
+    else:
+        run(fill(st["argv"], base), rep, total=q["steps"] if st["step"] == "training" else None)
+
+
+def publish(job: dict, rep: Reporter, files: list[Path], splats: list[Path], original, work: Path, site: Path, t0: float) -> dict:
+    """A finished splat (e.g. trained in Spirula Studio): lay it out as Spirula does and publish it, no training."""
+    rep.log("A finished splat was uploaded: publishing it as it is (no frames, masks or training).")
+    run_dir = work / "manual" / "outputs" / "run"
+    (run_dir / "step.ckpt").mkdir(parents=True, exist_ok=True)
+    sparse = work / "manual" / "sparse" / "0"
+    sparse.mkdir(parents=True, exist_ok=True)
+    splat = run_dir / "step.ckpt" / "splat.ply"
+    shutil.move(str(max(splats, key=lambda p: p.stat().st_size)), splat)
+    for p in files:
+        name = original(p)
+        if name == "scene_transform.json":
+            shutil.move(str(p), run_dir / name)
+        elif name in CAMERA_FILES:
+            shutil.move(str(p), sparse / name)
+    if not ((sparse / "images.bin").exists() or (sparse / "images.txt").exists()):
+        raise RuntimeError("Upload the images.bin of the splat's dataset (sparse/0) with it: the tour needs the walked path.")
+    if not (run_dir / "scene_transform.json").exists():
+        rep.log("  no scene_transform.json uploaded; assuming the splat is in the cameras' own frame")
+    send_preview(job, "tour", lambda: previews.splat(splat, sparse, read_cams, pt.read_ply, pt.load_scene_transform), rep)
+    return build_and_upload(job, rep, splat, sparse, site, t0)
+
+
+def build_and_upload(job: dict, rep: Reporter, splat: Path, sparse: Path, site: Path, t0: float) -> dict:
+    s, tour = job["settings"], job["tour"]
     # 3. the walkable tour; an earlier tour.json keeps its rooms and hand edits
     rep.set("tour")
     tour_dir = site / "tours" / tour["id"]

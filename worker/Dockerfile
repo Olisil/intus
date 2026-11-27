@@ -34,6 +34,11 @@ RUN M=/opt/cache/spirula-studio/models && mkdir -p $M && cd $M \
     && curl -fsSL -o grounding-dino-tiny.safetensors https://huggingface.co/IDEA-Research/grounding-dino-tiny/resolve/main/model.safetensors \
     && curl -fsSL -o bert-base-uncased-vocab.txt https://huggingface.co/IDEA-Research/grounding-dino-tiny/resolve/main/vocab.txt
 
+# RoMa v2 (MIT, with Meta's DINOv3 licence) for camera positions, depth and training; Spirula would fetch it on every cold start.
+# The licences are accepted for the service in recipes/<version>.json (--accept-license).
+RUN cd /opt/cache/spirula-studio/models \
+    && curl -fsSL -o romav2.0.1.pt https://github.com/Parskatt/RoMaV2/releases/download/v2.0.1/romav2.0.1.pt
+
 # splat-transform for SOG compression and the collision mesh (publish_tour.py prefers an installed one)
 RUN npm install -g @playcanvas/splat-transform@3
 
