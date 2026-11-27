@@ -1,0 +1,4 @@
+*
+!tools/
+!worker/
+**/__pycache__
