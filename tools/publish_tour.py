@@ -122,7 +122,7 @@ PLY_TYPES = {"float": "f4", "float32": "f4", "double": "f8", "float64": "f8", "u
              "int": "i4", "int32": "i4", "uint": "u4", "uint32": "u4"}
 
 
-LITE_MAX = 450_000  # splats in the light version at most
+LITE_MAX = 600_000  # splats in the light version at most
 
 
 def read_ply(path: Path):

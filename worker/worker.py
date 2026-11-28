@@ -61,6 +61,11 @@ NAME = os.environ.get("WORKER_NAME") or f"{socket.gethostname()}-{os.getpid()}"
 WORK = Path(os.environ.get("WORK_DIR", "/work"))
 PART = 32 * 1024 * 1024          # output parts (Probe accepts single files up to 90 MB)
 SINGLE_MAX = 80 * 1024 * 1024
+# What a published tour holds. Tested on Hemma (3M splats trained): thinned to 19 MB (37%) plain walls went blotchy
+# and fine detail was lost; at about 30 MB (58%) it was close to the whole splat. The light version for phones was
+# clearly better at 500k than at 330k. Adaptive thinning (--thin adaptive) was blurrier than uniform at both sizes.
+MAX_MB = 32          # full version, about 2 million splats
+LITE_MAX = 600_000   # light version
 SPLAT = re.compile(r"\.ply$", re.I)
 CAMERA_FILES = {"images.bin", "images.txt", "cameras.bin", "cameras.txt", "points3D.bin", "points3D.txt", "scene_transform.json"}
 VIDEO = re.compile(r"\.(osv|insv|360|mp4|mov|m4v|mkv|avi|lrv)$", re.I)
@@ -546,7 +551,7 @@ def build_and_upload(job: dict, rep: Reporter, splat: Path, sparse: Path, site: 
         (tour_dir / "tour.json").write_bytes(r.content)
     run([sys.executable, "-u", str(TOOLS / "publish_tour.py"), f"--splat={splat}", f"--sparse={sparse}", f"--name={tour['id']}",
          f"--title={tour['title']}", f"--subtitle={tour['subtitle']}", f"--eyebrow={tour['eyebrow']}", f"--lang={tour['lang']}",
-         f"--site={site}", f"--max-mb={s.get('maxMb', 19)}", f"--thin={s.get('thin', 'uniform')}", f"--lite-max={int(s.get('liteMax', 450000))}", f"--lite={s['lite']}", f"--crop={s['crop']}", f"--eye-height={s['eyeHeight']}"], rep)
+         f"--site={site}", f"--max-mb={s.get('maxMb', MAX_MB)}", f"--thin={s.get('thin', 'uniform')}", f"--lite-max={int(s.get('liteMax', LITE_MAX))}", f"--lite={s['lite']}", f"--crop={s['crop']}", f"--eye-height={s['eyeHeight']}"], rep)
     rep.check()
 
     # 4. publish: tour.json last, so the tour only changes once its files are in place
