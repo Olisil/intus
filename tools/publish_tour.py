@@ -559,8 +559,9 @@ def main():
     ap.add_argument("--site", type=Path, default=HERE / "site",
                     help="where to publish: a plain site folder (viewer is copied in), or your Astro/Webflow Cloud "
                          "repo folder (tours go to public/tours, the viewer is left alone)")
-    ap.add_argument("--max-mb", type=float, default=19.0,
-                    help="largest tour.sog allowed (Webflow Cloud caps static files at 20 MB); thins the splat to fit")
+    ap.add_argument("--max-mb", type=float, default=32.0,
+                    help="largest tour.sog (about 16 MB per million splats); a bigger splat is thinned to fit, 0 = never. "
+                         "Tours are served from the tour store, so the old 20 MB limit of Webflow Cloud no longer applies")
     ap.add_argument("--up", choices=["auto", "+x", "-x", "+y", "-y", "+z", "-z"], default="auto")
     ap.add_argument("--crop", type=float, default=5.0, help="keep splats within this many metres of the walked path")
     ap.add_argument("--max-size", type=float, default=1.5, help="drop haze blobs larger than this (metres)")
