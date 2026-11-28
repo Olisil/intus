@@ -206,10 +206,12 @@ def peak(h, w, lo, hi, bin_size=0.02):
 def floor_under_path(path_pts, xyz, opacity, scales_lin, quats_wxyz, up, log=print):
     """Height of the floor under every camera position (distance along `up`, positive).
 
-    Floors are found as horizontal planes made of flat, horizontal splats. Under each camera
-    we take the LOWEST such plane 0.7-2.4 m below it that is actually present there - table
-    and counter tops are planes too, but they are never the lowest. Positions without a
-    clear floor (stairs, holes) are interpolated along the walk."""
+    Floors are horizontal planes made of flat, horizontal splats. Which planes are floors is decided by
+    all positions together: under each one the strongest such surface 0.8-2.4 m below the camera gets a
+    vote. A table or a bed wins here and there, a real floor wins under a large part of the walk.
+    (Taking the lowest surface instead fails upstairs: there it is the ceiling of the room below, 30 cm
+    under the real floor, or the top of its cabinets.) Each position then stands on the floor below it
+    if the camera is about as high above it as at the positions around; the rest are stairs."""
     q = quats_wxyz / np.linalg.norm(quats_wxyz, axis=1, keepdims=True)
     w, x, y, z = q.T
     thin = np.argmin(scales_lin, 1)
@@ -221,36 +223,45 @@ def floor_under_path(path_pts, xyz, opacity, scales_lin, quats_wxyz, up, log=pri
     flat = (opacity > 0.4) & (np.abs(normal @ up) > 0.9) & (smax < 0.3) & (scales_lin.min(1) < 0.35 * smax)
     F, W = xyz[flat], opacity[flat]
     hF = F @ up
-    # candidate planes: peaks of the height histogram of horizontal splats
-    bins = np.arange(hF.min(), hF.max() + 0.05, 0.05)
-    hist, edges = np.histogram(hF, bins=bins, weights=W)
-    sm = np.convolve(hist, [0.25, 0.5, 0.25], "same")
-    peaks = [i for i in range(1, len(sm) - 1) if sm[i] >= sm[i - 1] and sm[i] >= sm[i + 1] and sm[i] >= 0.25 * sm.max()]
-    planes = np.array(sorted(0.5 * (edges[i] + edges[i + 1]) for i in peaks))
     e1, e2 = basis_for(up)
     tree = cKDTree(np.stack([F @ e1, F @ e2], 1))
     hc = path_pts @ up
-    dist = np.full(len(path_pts), np.nan)
+    n = len(path_pts)
+    # pass 1: one vote per position for the strongest surface under it
+    vote = np.full(n, np.nan)
     for i, c in enumerate(path_pts):
-        idx = tree.query_ball_point([c @ e1, c @ e2], 1.0)
+        idx = tree.query_ball_point([c @ e1, c @ e2], 0.8)
         if len(idx) < 5:
             continue
         hh, ww = hF[idx], W[idx]
-        present = [pl for pl in planes if hc[i] - 2.4 <= pl <= hc[i] - 0.25 and ww[np.abs(hh - pl) < 0.1].sum() >= 1.0]
-        cand = [pl for pl in present if pl <= hc[i] - 0.7]
-        if cand:
-            dist[i] = hc[i] - cand[0]  # lowest: table, sofa and counter tops are never the lowest
-    known = np.isfinite(dist)
-    if known.sum() < 5:
+        edges = np.arange(hc[i] - 2.4, hc[i] - 0.8 + 0.05, 0.05)
+        hist, _ = np.histogram(hh, bins=edges, weights=ww)
+        sm = np.convolve(hist, [0.5, 1, 0.5], "same")
+        if sm.max() >= 1.0:
+            j = int(np.argmax(sm))
+            near = (hh > edges[j] - 0.05) & (hh < edges[j + 1] + 0.05)
+            vote[i] = np.average(hh[near], weights=ww[near])
+    voted = np.isfinite(vote)
+    if voted.sum() < 5:
         return None
-    # pass 2: the real floor levels are the planes chosen under many positions
-    chosen = hc[known] - dist[known]
-    floors = [pl for pl in planes if np.mean(np.abs(chosen - pl) < 0.05) >= 0.1] or list(planes)
-    on_floor = np.any(np.abs((hc - dist)[:, None] - np.array(floors)[None, :]) < 0.05, 1) & known
-    carry0 = float(np.median(dist[on_floor])) if on_floor.any() else float(np.nanmedian(dist))
-    # each position stands on the nearest of those floors that is really there underneath;
-    # none within carry height (0.25-2.4 m) means stairs or a void
-    d2 = np.full(len(path_pts), np.nan)
+    v = vote[voted]
+    edges = np.arange(v.min() - 0.1, v.max() + 0.2, 0.05)
+    hist, _ = np.histogram(v, bins=edges)
+    sm = np.convolve(hist, [1, 1, 1, 1, 1], "same")          # votes within +-12 cm
+    peaks = sorted((i for i in range(1, len(sm) - 1) if sm[i] >= sm[i - 1] and sm[i] > sm[i + 1] and sm[i] >= 0.1 * len(v)),
+                   key=lambda i: -sm[i])
+    floors, votes = [], []
+    for i in peaks:
+        h = float(np.median(v[np.abs(v - (edges[i] + 0.025)) < 0.13]))
+        # furniture under a floor's walk: something within 1.5 m above a floor needs nearly as many votes to be a floor too
+        if any(abs(h - f) < 0.4 or (0 < h - f < 1.5 and sm[i] < 0.6 * w) for f, w in zip(floors, votes)):
+            continue
+        floors.append(h); votes.append(sm[i])
+    if not floors:
+        floors = [float(np.median(v))]
+    floors = sorted(floors)
+    # pass 2: each position stands on the floor below it that is really there underneath
+    cand = np.full(n, np.nan)
     for i, c in enumerate(path_pts):
         idx_ = tree.query_ball_point([c @ e1, c @ e2], 0.6)
         if not idx_:
@@ -258,10 +269,20 @@ def floor_under_path(path_pts, xyz, opacity, scales_lin, quats_wxyz, up, log=pri
         hh, ww = hF[idx_], W[idx_]
         for pl in sorted((f for f in floors if f < hc[i] - 0.25), reverse=True):
             if ww[np.abs(hh - pl) < 0.1].sum() >= 1.0:
-                # only if the camera is about your usual carry height above it (not halfway up a stair)
-                if abs((hc[i] - pl) - carry0) <= 0.5:
-                    d2[i] = hc[i] - pl
+                cand[i] = hc[i] - pl
                 break
+    ok = np.isfinite(cand) & (cand >= 0.8) & (cand <= 2.5)
+    if ok.sum() < 5:
+        return None
+    # ... if the camera is about as high above it as around there. The camera is carried at a height that
+    # changes slowly (it may be raised and lowered during the walk), so compare with the positions around,
+    # not with the whole walk; a position far off is on a stair, seeing the floor it leaves or reaches.
+    ii = np.arange(n)
+    filled = np.interp(ii, ii[ok], cand[ok])
+    k = 40
+    pad = np.r_[np.full(k, filled[0]), filled, np.full(k, filled[-1])]
+    around = np.array([np.median(pad[i:i + 2 * k + 1]) for i in range(n)])
+    d2 = np.where(ok & (np.abs(cand - around) <= 0.45), cand, np.nan)
     known = np.isfinite(d2)
     if known.sum() < 5:
         return None
@@ -551,6 +572,9 @@ def main():
     ap.add_argument("--fresh-rooms", action="store_true", help="detect the rooms again, even if they were edited in the studio")
     ap.add_argument("--lite", type=float, default=40,
                     help="also write tour-lite.sog with this %% of the splats for phones and slower computers (0 = off)")
+    ap.add_argument("--lite-max", type=int, default=LITE_MAX, help="splats in the light version at most")
+    ap.add_argument("--thin", choices=["uniform", "adaptive"], default="uniform",
+                    help="how splats are thinned to fit the size limit: at the same rate everywhere, or more where it shows less")
     ap.add_argument("--no-sog", action="store_true", help="skip SOG compression (write a PLY instead, for testing)")
     ap.add_argument("--keep", action="store_true", help="keep intermediate files")
     ap.add_argument("--gpu", default="auto",
@@ -560,6 +584,7 @@ def main():
                     help="WebGPU backend for the graphics card (auto tries the default, then Vulkan on Windows)")
     ap.add_argument("--list-gpus", action="store_true", help="list graphics cards that can be used and exit")
     a = ap.parse_args()
+    DEC = "--decimate-adaptive" if a.thin == "adaptive" else "-d"
     if a.list_gpus:
         gpus = list_gpus()
         for i, n in gpus:
@@ -737,7 +762,7 @@ def main():
             pct = max(5.0, pct * a.max_mb / mb * 0.9)
             log(f"  tour.sog is {mb:.1f} MB (limit {a.max_mb:g} MB) - keeping the {pct:.0f}% most important splats")
             thin = work / "thinned.ply"
-            run_gpu([aligned, "-d", f"{pct:.0f}%", thin], "thin")
+            run_gpu([aligned, DEC, f"{pct:.0f}%", thin], "thin")
             to_sog(thin, "SOG")
             mb = (out / "tour.sog").stat().st_size / 1e6
             log(f"  tour.sog is now {mb:.1f} MB")
@@ -746,11 +771,11 @@ def main():
         # and a phone gets at most LITE_MAX splats: a 3M-splat training once gave a 900k light version that
         # phones could not draw.
         n_all = int(np.count_nonzero(keep)) if getattr(keep, "dtype", None) == bool else len(keep)
-        lite_pct = min(a.lite * pct / 100, 100.0 * LITE_MAX / max(1, n_all)) if a.lite else 0
+        lite_pct = min(a.lite * pct / 100, 100.0 * a.lite_max / max(1, n_all)) if a.lite else 0
         if a.lite and 0 < a.lite < 100:
-            log(f"Light version ({a.lite:g}% of the tour's splats, at most {LITE_MAX:,}; {lite_pct:.0f}% of the trained ones, for phones and slower computers)")
+            log(f"Light version ({a.lite:g}% of the tour's splats, at most {a.lite_max:,}; {lite_pct:.0f}% of the trained ones, for phones and slower computers)")
             thin = work / "lite.ply"
-            run_gpu([aligned, "-d", f"{max(1, round(lite_pct))}%", thin], "thin")
+            run_gpu([aligned, DEC, f"{max(1, round(lite_pct))}%", thin], "thin")
             to_sog(thin, "light SOG", lite, ["-H", "1"])
             files["splatLite"] = lite.name
         elif lite.exists():
